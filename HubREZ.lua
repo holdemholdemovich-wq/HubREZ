@@ -25,6 +25,7 @@ local GAMES = {
 		name = "The Button",
 		sub = "TheButtonREZ  ·  ESP",
 		file = "TheButtonREZ_menu.lua",  -- имя файла в репозитории
+		icon = "thebutton.jpg",          -- картинка игры (лежит в репозитории)
 		guiName = "TheButtonREZ",        -- имя окна скрипта: хаб прячется, пока оно открыто
 		placeId = nil, -- сюда можно вписать PlaceId игры, тогда хаб предупредит, если ты не в ней
 		about = "TheButtonREZ — меню для игры The Button.\n\nЧто умеет:\n• ESP: боксы, трейсеры, ники, здоровье, дистанция, скелет\n• Стрелки-указатели на игроков за экраном\n• Настройка цветов, толщины линий и дальности\n• Работает на телефоне и ПК, сворачивается в кружок\n\nМеню открывается после нажатия Execute.",
@@ -320,6 +321,28 @@ local function favText(on)
 	return '<font color="' .. (on and "#facc15" or "#80809c") .. '">★</font>  In Favorites'
 end
 
+-- Иконки игр: качаем картинку из репозитория, сохраняем файл и показываем через getcustomasset
+local iconCache = {}
+local function loadIcon(g, img, ph)
+	if not g.icon then return end
+	task.spawn(function()
+		local ok, asset = pcall(function()
+			if iconCache[g.icon] then return iconCache[g.icon] end
+			local path = "HubREZ_" .. g.icon
+			if not (isfile and isfile(path)) then
+				writefile(path, game:HttpGet(GITHUB_RAW .. g.icon))
+			end
+			local a = (getcustomasset or getsynasset)(path)
+			iconCache[g.icon] = a
+			return a
+		end)
+		if ok and asset and img.Parent then
+			img.Image = asset
+			ph.Visible = false
+		end
+	end)
+end
+
 local function buildCard(parent, g)
 	local card = new("Frame", { Size = UDim2.new(1, 0, 0, CARD_H), BackgroundColor3 = C.card, BorderSizePixel = 0,
 		ClipsDescendants = true, LayoutOrder = nextOrder() }, parent)
@@ -327,10 +350,20 @@ local function buildCard(parent, g)
 	stroke(card, C.line, 1)
 
 	local head = new("TextButton", { Size = UDim2.new(1, 0, 0, CARD_H), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, card)
-	local nameL = label(head, g.name, 15, C.txt, true)
-	nameL.Position, nameL.Size = UDim2.fromOffset(14, 10), UDim2.new(1, -90, 0, 20)
+	local icon = new("ImageLabel", { Size = UDim2.fromOffset(42, 42), Position = UDim2.fromOffset(10, 9),
+		BackgroundColor3 = C.bg, BorderSizePixel = 0, ScaleType = Enum.ScaleType.Crop, Image = "" }, head)
+	corner(icon, 9)
+	stroke(icon, C.line, 1)
+	local ph = label(icon, string.upper(string.sub(g.name, 1, 1)), 18, C.acc2, true)
+	ph.Size, ph.TextXAlignment = UDim2.fromScale(1, 1), Enum.TextXAlignment.Center
+	loadIcon(g, icon, ph)
+
+	local nameL = label(head, g.name, 14, C.txt, true)
+	nameL.Position, nameL.Size = UDim2.fromOffset(62, 10), UDim2.new(1, -142, 0, 20)
+	nameL.TextTruncate = Enum.TextTruncate.AtEnd
 	local subL = label(head, g.sub or "", 12, C.mut, false)
-	subL.Position, subL.Size = UDim2.fromOffset(14, 32), UDim2.new(1, -90, 0, 16)
+	subL.Position, subL.Size = UDim2.fromOffset(62, 32), UDim2.new(1, -142, 0, 16)
+	subL.TextTruncate = Enum.TextTruncate.AtEnd
 	local star = label(head, "★", 18, C.gold, true)
 	star.TextXAlignment = Enum.TextXAlignment.Center
 	star.Position, star.Size = UDim2.new(1, -66, 0.5, -12), UDim2.fromOffset(24, 24)
