@@ -1,5 +1,6 @@
 -- ============================================================
--- BabftREZ — Build A Boat For Treasure (Auto Farm / Fun / ESP)
+-- BabftREZ — Build A Boat For Treasure
+-- Auto Farm / Quests / Building (копирование баз) / Fun / ESP / Troll
 -- Телефон + ПК. Запускать из HubREZ или напрямую в исполнителе.
 -- ============================================================
 local Players = game:GetService("Players")
@@ -178,7 +179,7 @@ local function Tab(name)
 	new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14) }, p)
 	pages[name] = p
 
-	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
+	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
 		Text = name, TextColor3 = C.mut, TextSize = 14, Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = nextOrder() }, side)
 	corner(b, 10)
@@ -285,6 +286,72 @@ local function Status(page, text)
 	return function(t) l.Text = t end
 end
 
+local function Progress(page, text)
+	local row = card(page, 56)
+	local t = label(row, text, 14, C.txt, true)
+	t.Position, t.Size = UDim2.fromOffset(14, 8), UDim2.new(0.6, 0, 0, 18)
+	local pct = label(row, "0%", 13, C.acc2, true)
+	pct.TextXAlignment = Enum.TextXAlignment.Right
+	pct.Position, pct.Size = UDim2.new(0.5, 0, 0, 8), UDim2.new(0.5, -14, 0, 18)
+	local tr = new("Frame", { Position = UDim2.new(0, 14, 0, 36), Size = UDim2.new(1, -28, 0, 8), BackgroundColor3 = C.off, BorderSizePixel = 0 }, row)
+	corner(tr, 4)
+	local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.acc, BorderSizePixel = 0 }, tr)
+	corner(fill, 4)
+	gradient(fill, C.acc, C.acc2)
+	return function(p)
+		p = math.clamp(p, 0, 100)
+		fill.Size = UDim2.new(p / 100, 0, 1, 0)
+		pct.Text = math.floor(p) .. "%"
+	end
+end
+
+-- Выпадающий список: getOptions() -> { {label=, value=}, ... }
+local function Dropdown(page, text, getOptions, cb)
+	local HEAD = 54
+	local box = new("Frame", { Size = UDim2.new(1, 0, 0, HEAD), BackgroundColor3 = C.card, BorderSizePixel = 0,
+		ClipsDescendants = true, LayoutOrder = nextOrder() }, page)
+	corner(box, 12)
+	stroke(box, C.line, 1)
+	local head = new("TextButton", { Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, box)
+	local t = label(head, text, 14, C.txt, true)
+	t.Position, t.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -60, 0, 18)
+	local valueL = label(head, "Не выбрано", 12, C.acc2, false)
+	valueL.Position, valueL.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -60, 0, 16)
+	local arrow = label(head, ">", 16, C.mut, true)
+	arrow.TextXAlignment = Enum.TextXAlignment.Center
+	arrow.AnchorPoint = Vector2.new(0.5, 0.5)
+	arrow.Position, arrow.Size = UDim2.new(1, -24, 0.5, 0), UDim2.fromOffset(24, 24)
+	local list = new("ScrollingFrame", { Position = UDim2.fromOffset(10, HEAD), Size = UDim2.new(1, -20, 0, 0), BackgroundTransparency = 1,
+		BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = C.acc, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		CanvasSize = UDim2.new() }, box)
+	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+	local open = false
+	local function setOpen(v)
+		open = v
+		local n = 0
+		if v then
+			for _, c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+			local opts = getOptions()
+			for i, o in ipairs(opts) do
+				local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.bg, Text = o.label, TextColor3 = C.txt,
+					Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false, LayoutOrder = i }, list)
+				corner(b, 8)
+				b.MouseButton1Click:Connect(function()
+					valueL.Text = o.label
+					cb(o.value)
+					setOpen(false)
+				end)
+			end
+			n = #opts
+		end
+		local listH = math.min(n * 34, 136)
+		list.Size = UDim2.new(1, -20, 0, listH)
+		TweenService:Create(box, TI, { Size = UDim2.new(1, 0, 0, v and (HEAD + listH + 8) or HEAD) }):Play()
+		TweenService:Create(arrow, TI, { Rotation = v and 90 or 0 }):Play()
+	end
+	head.MouseButton1Click:Connect(function() setOpen(not open) end)
+end
+
 local toast = new("TextLabel", {
 	AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 60, 1, -12), Size = UDim2.fromOffset(300, 30),
 	BackgroundColor3 = C.card, BackgroundTransparency = 1, TextTransparency = 1, TextColor3 = C.txt,
@@ -302,20 +369,38 @@ local function notify(text, color)
 	end)
 end
 
----------------------------------------------------------------- AUTO FARM
+---------------------------------------------------------------- Пути игры и персонаж
+local blockData, blocksFolder, OtherData, Stages, ChestTrigger, ClaimRemote, StartQuest
+local function refreshPaths()
+	blockData = player:FindFirstChild("Data")
+	blocksFolder = workspace:FindFirstChild("Blocks")
+	OtherData = player:FindFirstChild("OtherData")
+	local bs = workspace:FindFirstChild("BoatStages")
+	Stages = bs and bs:FindFirstChild("NormalStages")
+	local te = Stages and Stages:FindFirstChild("TheEnd")
+	local gc = te and te:FindFirstChild("GoldenChest")
+	ChestTrigger = gc and gc:FindFirstChild("Trigger")
+	ClaimRemote = workspace:FindFirstChild("ClaimRiverResultsGold")
+	StartQuest = workspace:FindFirstChild("QuestMakerEvent")
+	return (blockData and blocksFolder and OtherData and Stages and ChestTrigger and ClaimRemote and StartQuest) and true or false
+end
+local function needGame()
+	if refreshPaths() then return true end
+	notify("Ты не в BABFT или игра изменилась", C.red)
+	return false
+end
+
+local character, humanoid, HRP
+local function bindChar(c)
+	character = c
+	humanoid = c and c:FindFirstChildOfClass("Humanoid")
+	HRP = c and c:FindFirstChild("HumanoidRootPart")
+end
+bindChar(player.Character)
+
+---------------------------------------------------------------- AUTO FARM (логика из BbaftoREZ)
 local setStatus = function() end
 local farming, farmConn = false, nil
-
-local function getPaths()
-	local bs = workspace:FindFirstChild("BoatStages")
-	local stages = bs and bs:FindFirstChild("NormalStages")
-	local od = player:FindFirstChild("OtherData")
-	local theEnd = stages and stages:FindFirstChild("TheEnd")
-	local gc = theEnd and theEnd:FindFirstChild("GoldenChest")
-	local chest = gc and gc:FindFirstChild("Trigger")
-	local claim = workspace:FindFirstChild("ClaimRiverResultsGold")
-	return stages, od, chest, claim
-end
 
 local function zeroVelocity(char)
 	for _, p in ipairs(char:GetChildren()) do
@@ -326,11 +411,11 @@ local function zeroVelocity(char)
 	end
 end
 
-local function collectStage(n, stages, od)
-	local stage = stages:FindFirstChild("CaveStage" .. n)
+local function collectStage(n)
+	local stage = Stages:FindFirstChild("CaveStage" .. n)
 	local collect = stage and stage:FindFirstChild("DarknessPart")
 	if not collect then return end
-	local data = od:FindFirstChild("Stage" .. (n - 1))
+	local data = OtherData:FindFirstChild("Stage" .. (n - 1))
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if not hum then return end
@@ -343,27 +428,23 @@ local function collectStage(n, stages, od)
 	until (data and data.Value ~= "") or hum.Health <= 0 or not cfg.AutoFarm
 end
 
-local function touchChest(chest, od)
+local function touchChest()
 	task.spawn(function()
 		local char = player.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if not hum then return end
 		repeat
-			local old = chest.CFrame
-			chest.CFrame = char:GetPivot()
+			local old = ChestTrigger.CFrame
+			ChestTrigger.CFrame = char:GetPivot()
 			task.wait()
-			chest.CFrame = old
-		until (od:FindFirstChild("End") and od.End.Value ~= "") or hum.Health <= 0 or not cfg.AutoFarm
+			ChestTrigger.CFrame = old
+		until (OtherData:FindFirstChild("End") and OtherData.End.Value ~= "") or hum.Health <= 0 or not cfg.AutoFarm
 	end)
 end
 
 local function farm()
 	if farming or not cfg.AutoFarm then return end
-	local stages, od, chest, claim = getPaths()
-	if not (stages and od and chest and claim) then
-		notify("Ты не в BABFT или игра изменилась", C.red)
-		return
-	end
+	if not needGame() then return end
 	local char = player.Character or player.CharacterAdded:Wait()
 	local hum = char:WaitForChild("Humanoid")
 	farming = true
@@ -371,14 +452,14 @@ local function farm()
 		if not cfg.AutoFarm or hum.Health <= 0 then break end
 		setStatus("Этап " .. n .. " / 10")
 		local done = false
-		task.spawn(function() collectStage(n, stages, od); done = true end)
+		task.spawn(function() collectStage(n); done = true end)
 		repeat task.wait() until done or hum.Health <= 0 or not cfg.AutoFarm
 		if n ~= cfg.ChestClaimStage then
-			if cfg.AutoClaim then claim:FireServer() end
+			if cfg.AutoClaim then ClaimRemote:FireServer() end
 		elseif cfg.ClaimChest then
 			task.spawn(function()
 				task.wait(cfg.ChestClaimDelay)
-				touchChest(chest, od)
+				touchChest()
 			end)
 		end
 	end
@@ -408,7 +489,277 @@ cleanups[#cleanups + 1] = function()
 	if farmConn then farmConn:Disconnect() end
 end
 
----------------------------------------------------------------- FUN: скорость, прыжок, noclip, fly
+---------------------------------------------------------------- QUESTS (логика из BbaftoREZ)
+local function GetZone() return workspace[player.TeamColor.Name .. "Zone"] end
+local function GetQuest() return GetZone():WaitForChild("Quest") end
+
+local function Place(Name, Pos)
+	local BTool = player.Backpack:FindFirstChild("BuildingTool") or player.Character:FindFirstChild("BuildingTool")
+	if not BTool then return end
+	if BTool.Parent ~= player.Character then BTool.Parent = player.Character end
+	task.spawn(function()
+		BTool.RF:InvokeServer(Name, player.Data[Name].Value, nil, nil, false, Pos, false)
+	end)
+end
+
+local Quests = {
+	function()
+		local Quest = GetQuest()
+		Quest:WaitForChild("Cloud"):WaitForChild("Part1").CFrame = player.Character:GetPivot()
+	end,
+	function()
+		local Quest = GetQuest()
+		local Target = Quest:WaitForChild("Target")
+		local Done = false
+		repeat
+			for _, Part in Target:GetChildren() do
+				if Part.Name == "Part" and Part:FindFirstChildOfClass("Script") then
+					Done = true
+					Part.CFrame = player.Character:GetPivot()
+					break
+				end
+			end
+			task.wait()
+		until Done
+	end,
+	function()
+		local Quest = GetQuest()
+		local Ramp = Quest:WaitForChild("Ramp")
+		local Done = false
+		repeat
+			for _, Part in Ramp:GetChildren() do
+				if Part.Name == "Part" and Part:FindFirstChildOfClass("TouchTransmitter") then
+					Done = true
+					Part.CFrame = player.Character:GetPivot()
+					break
+				end
+			end
+			task.wait()
+		until Done
+	end,
+	function()
+		local Quest = GetQuest()
+		local Zone = GetZone()
+		repeat
+			task.wait()
+			if not Quest then break end
+			local Butter = Quest:FindFirstChild("Butter")
+			if not Butter then continue end
+			local Part = Butter:FindFirstChild("PPart")
+			if not Part then continue end
+			local Click = Part:FindFirstChildOfClass("ClickDetector")
+			if not Click then continue end
+			fireclickdetector(Click)
+		until not Zone:FindFirstChild("Quest")
+	end,
+	function() end,
+	function()
+		local Zone = GetZone()
+		local Quest = GetQuest()
+		local MBox = Quest:WaitForChild("MBox")
+		if not MBox then return end
+		local PPart = MBox:WaitForChild("PPart")
+		if not PPart then return end
+		Place("Seat", PPart.CFrame * CFrame.new(2, 0, 0))
+		local Finished = false
+		blocksFolder[player.Name].ChildAdded:Once(function(SeatModel)
+			local Char = player.Character
+			local Hum = Char.Humanoid
+			SeatModel:WaitForChild("Seat"):Sit(Hum)
+			repeat task.wait() until Hum.Sit
+			Zone.VoteLaunchRE:FireServer()
+			task.wait(.5)
+			Char:PivotTo(ChestTrigger.CFrame * CFrame.new(0, 0, 0))
+			task.wait(5)
+			Finished = true
+		end)
+		repeat task.wait() until Finished
+	end,
+	function() end,
+	function() end,
+	function()
+		local Collect = Stages.CaveStage1.DarknessPart
+		local StageData = OtherData.Stage0
+		local Char = player.Character
+		if not Char then return end
+		local Hum = Char:FindFirstChildOfClass("Humanoid")
+		if not Hum then return end
+		repeat
+			task.wait()
+			if not Char then continue end
+			Char:PivotTo(Collect.CFrame * CFrame.new(0, -60, -10))
+			zeroVelocity(Char)
+		until StageData.Value ~= "" or not Char or not Hum or Hum.Health <= 0
+		player.Character:PivotTo(ChestTrigger.CFrame)
+	end,
+}
+
+local Questing = false
+local function completeQuests()
+	local Zone = GetZone()
+	if Zone:FindFirstChild("Quest") then
+		StartQuest:FireServer(0)
+		repeat task.wait() until not Zone:FindFirstChild("Quest")
+		task.wait(1)
+	end
+	for Num, Callback in pairs(Quests) do
+		if Num == 7 then Num = 8 end
+		if OtherData:FindFirstChild("Q" .. Num) or Num == 5 or Num == 8 then continue end
+		StartQuest:FireServer(Num)
+		Callback()
+		local Z = GetZone()
+		repeat task.wait() until not Z:FindFirstChild("Quest")
+		task.wait(1)
+	end
+end
+
+---------------------------------------------------------------- BUILDING: копирование баз (логика из BbaftoREZ)
+local usedList = {}
+local ignoreAnchored = true
+local clipboard, selectedBase = nil, nil
+local pastePercent = 0
+local pasting = false
+
+local function getBlockID(name)
+	return blockData:FindFirstChild(name) and blockData:FindFirstChild(name).Value or 9
+end
+
+local function setTransparency(transparencyWanted, block)
+	if not block then return end
+	if block.PPart.Transparency == transparencyWanted then return end
+	local calls = transparencyWanted / 0.25
+	local tool = character:FindFirstChild("PropertiesTool") or player.Backpack:FindFirstChild("PropertiesTool")
+	if tool.Parent ~= character then humanoid:EquipTool(tool) task.wait() end
+	local args = { "Transparency", { block } }
+	task.spawn(function()
+		for i = 1, calls do tool.SetPropertieRF:InvokeServer(unpack(args)) end
+	end)
+end
+
+local function rescaleBlock(block, newPos, newSize)
+	if not block then return end
+	local tool = character:FindFirstChild("ScalingTool") or player.Backpack:FindFirstChild("ScalingTool")
+	if tool.Parent ~= character then humanoid:EquipTool(tool) task.wait() end
+	task.spawn(function() tool.RF:InvokeServer(block, newSize, newPos) end)
+end
+
+local function getPlayerZone(p)
+	local teamColor = p.TeamColor
+	for _, v in pairs(workspace:GetChildren()) do
+		if v:FindFirstChild("TeamColor") and v.TeamColor.Value == teamColor then return v end
+	end
+end
+
+local function placeBlock(name, pos, relativeTo, Anchored)
+	local tool = character:FindFirstChild("BuildingTool") or player.Backpack:FindFirstChild("BuildingTool")
+	if tool.Parent ~= character then humanoid:EquipTool(tool) task.wait() end
+	if not relativeTo then relativeTo = getPlayerZone(player) end
+	local args = { name, getBlockID(name), relativeTo,
+		relativeTo and relativeTo.CFrame:ToObjectSpace(pos) or CFrame.new(),
+		ignoreAnchored and true or Anchored, pos, false }
+	task.spawn(function() tool.RF:InvokeServer(unpack(args)) end)
+end
+
+local function paintBlock(block, color)
+	if not block or not block:FindFirstChild("PPart") then return end
+	if block.PPart.Color == color then return end
+	local tool = character:FindFirstChild("PaintingTool") or player.Backpack:FindFirstChild("PaintingTool")
+	if tool.Parent ~= character then humanoid:EquipTool(tool) task.wait() end
+	task.spawn(function() tool.RF:InvokeServer({ { block, color } }) end)
+end
+
+local function getJoint(model)
+	for _, v in pairs(model.PPart:GetChildren()) do
+		if v:IsA("Snap") or v:IsA("Weld") then
+			if v.Part1 and not (v.Part1.Parent == model) then return v.Part1 end
+		end
+	end
+	return getPlayerZone(player)
+end
+
+local function getNewBlockPos(hisBase, block, myBase)
+	if not block or not block:FindFirstChild("PPart") then return CFrame.new() end
+	if not hisBase or not myBase then return block.PPart.CFrame end
+	return myBase.CFrame * hisBase.CFrame:ToObjectSpace(block.PPart.CFrame)
+end
+
+local function copyBuild(blocks)
+	usedList = {} -- сброс счётчика блоков перед каждым копированием
+	local t = {}
+	local myBase = getPlayerZone(player)
+	local hisBase = getPlayerZone(Players:FindFirstChild(blocks.Name))
+	for _, block in ipairs(blocks:GetChildren()) do
+		if block:FindFirstChild("PPart") then
+			if not (getBlockID(block.Name) == 0 or (usedList[block.Name] or 0) > getBlockID(block.Name)) then
+				local relative = getJoint(block)
+				relative = relative == hisBase and myBase or relative
+				usedList[block.Name] = (usedList[block.Name] or 0) + 1
+				table.insert(t, {
+					Name = block.Name,
+					Pos = getNewBlockPos(hisBase, block, myBase),
+					Relative = getPlayerZone(player),
+					Transparency = block.PPart.Transparency,
+					Anchored = block.PPart.Anchored,
+					Size = block.PPart.Size,
+					Color = block.PPart.Color,
+				})
+			end
+		end
+	end
+	return t
+end
+
+local function getBlock(expected, createdList)
+	local best, bestDist = nil, math.huge
+	for _, b in ipairs(createdList) do
+		if b and b:FindFirstChild("PPart") and b.Name == expected.Name then
+			local dist = (b.PPart.Position - expected.Pos.Position).Magnitude
+			if dist < bestDist then bestDist = dist; best = b end
+		end
+	end
+	return best
+end
+
+local function getPlayerBase()
+	for _, child in pairs(blocksFolder:GetChildren()) do
+		if child.Name == player.Name then return child end
+	end
+end
+
+local function pasteBuild(t, folder)
+	pastePercent = 0
+	local c
+	local tCount = math.max(#t, 1)
+	local lastPlaced = tick()
+	c = folder.ChildAdded:Connect(function() lastPlaced = tick() end)
+	for i, v in ipairs(t) do
+		placeBlock(v.Name, v.Pos, v.Relative, v.Anchored)
+		pastePercent += 50 / tCount
+		if i % 20 == 0 then task.wait(0.05) end
+	end
+	repeat task.wait(0.1) until tick() - lastPlaced > 5
+	local playerBaseList = folder:GetChildren()
+	for i, v in ipairs(t) do
+		local b = getBlock(v, playerBaseList)
+		rescaleBlock(b, v.Pos, v.Size)
+		paintBlock(b, v.Color)
+		setTransparency(v.Transparency, b)
+		if i % 20 == 0 then task.wait(0.05) end
+		pastePercent += 50 / tCount
+	end
+	c:Disconnect()
+	pastePercent = 0
+end
+
+local function playerOptions()
+	local out = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		out[#out + 1] = { label = p.DisplayName .. "  (@" .. p.Name .. ")", value = p.Name }
+	end
+	return out
+end
+
+---------------------------------------------------------------- FUN: скорость, прыжок, noclip, fly, invisible
 local function getHum()
 	local c = player.Character
 	return c and c:FindFirstChildOfClass("Humanoid")
@@ -477,6 +828,8 @@ end))
 
 track(player.CharacterAdded:Connect(function(c)
 	c:WaitForChild("Humanoid")
+	c:WaitForChild("HumanoidRootPart")
+	bindChar(c)
 	task.wait(0.3)
 	applyMove()
 	if cfg.Fly then startFly() end
@@ -489,6 +842,17 @@ track(player.Idled:Connect(function()
 		VirtualUser:ClickButton2(Vector2.new())
 	end
 end))
+
+local function setInvisible(v)
+	local c = player.Character
+	if not c then return end
+	for _, part in ipairs(c:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			part.Transparency = v and 1 or 0
+			part.CanCollide = not v
+		end
+	end
+end
 
 ---------------------------------------------------------------- ESP (подсветка + ники)
 local function clearESP()
@@ -541,6 +905,7 @@ end)
 cleanups[#cleanups + 1] = clearESP
 
 ---------------------------------------------------------------- Вкладки
+-- Auto Farm
 local farmPage = Tab("Auto Farm")
 Section(farmPage, "АВТОФАРМ ЗОЛОТА")
 setStatus = Status(farmPage, "Выключен")
@@ -551,20 +916,104 @@ Slider(farmPage, "Задержка сундука", 0, 5, cfg.ChestClaimDelay, "
 Toggle(farmPage, "Auto Claim Gold", "Забирать золото после этапов", true, function(v) cfg.AutoClaim = v end)
 Toggle(farmPage, "Claim Chest", "Забирать сундук в конце", true, function(v) cfg.ClaimChest = v end)
 
+-- Quests
+local questPage = Tab("Quests")
+Section(questPage, "КВЕСТЫ")
+Button(questPage, "Complete Quests", "Выполняет все доступные квесты", "Start", function(b)
+	if Questing then return end
+	if not needGame() then return end
+	Questing = true
+	b.Text = "Running…"
+	task.spawn(function()
+		local ok = pcall(completeQuests)
+		Questing = false
+		b.Text = "Start"
+		notify(ok and "Квесты выполнены" or "Ошибка при выполнении квестов", ok and C.green or C.red)
+	end)
+end)
+
+-- Building
+local buildPage = Tab("Auto Build")
+Section(buildPage, "AUTO BUILD — КОПИРОВАНИЕ БАЗ")
+Dropdown(buildPage, "Выбрать игрока", playerOptions, function(name)
+	selectedBase = nil
+	refreshPaths()
+	if blocksFolder then
+		for _, folder in ipairs(blocksFolder:GetChildren()) do
+			if folder.Name == name then selectedBase = folder end
+		end
+	end
+	if not selectedBase then notify("У игрока нет базы", C.gold) end
+end)
+Button(buildPage, "Copy Base", "Скопировать базу выбранного игрока", "Copy", function()
+	if not needGame() then return end
+	if not selectedBase then notify("Сначала выбери игрока", C.gold) return end
+	local ok, res = pcall(copyBuild, selectedBase)
+	if ok then
+		clipboard = res
+		notify("Скопировано блоков: " .. #res, C.green)
+	else
+		notify("Ошибка копирования", C.red)
+	end
+end)
+Button(buildPage, "Paste Base", "Построить скопированную базу у себя", "Paste", function()
+	if not needGame() then return end
+	if not clipboard then notify("Сначала скопируй базу", C.gold) return end
+	if pasting then notify("Уже строится…", C.gold) return end
+	pasting = true
+	task.spawn(function()
+		local ok = pcall(function() pasteBuild(clipboard, getPlayerBase()) end)
+		pasting = false
+		pastePercent = 0
+		notify(ok and "База построена" or "Ошибка постройки", ok and C.green or C.red)
+	end)
+end)
+local setProgress = Progress(buildPage, "Auto Build Progress")
+task.spawn(function()
+	while gui.Parent do
+		setProgress(pastePercent)
+		task.wait(0.2)
+	end
+end)
+Section(buildPage, "AUTO BUILD SETTINGS")
+Button(buildPage, "Place Wood Block", "Поставить деревянный блок под собой", "Place", function()
+	if not needGame() then return end
+	pcall(placeBlock, "WoodBlock", HRP.CFrame, nil, true)
+end)
+local rescaleClick = false
+Toggle(buildPage, "Rescale Block (click)", "Клик по блоку — размер 4×4×4", false, function(v) rescaleClick = v end)
+do
+	local mouse = player:GetMouse()
+	track(mouse.Button1Down:Connect(function()
+		if rescaleClick and mouse.Target then
+			pcall(rescaleBlock, mouse.Target.Parent, mouse.Target.CFrame, Vector3.new(4, 4, 4))
+		end
+	end))
+end
+Toggle(buildPage, "Ignore Anchored State", "Не учитывать закрепление блоков", true, function(v) ignoreAnchored = v end)
+
+-- Fun
 local funPage = Tab("Fun")
 Section(funPage, "ДВИЖЕНИЕ")
 Slider(funPage, "Скорость", 16, 200, cfg.WalkSpeed, "", function(v) cfg.WalkSpeed = v; applyMove() end)
-Slider(funPage, "Прыжок", 50, 300, cfg.JumpPower, "", function(v) cfg.JumpPower = v; applyMove() end)
+Slider(funPage, "Прыжок", 50, 500, cfg.JumpPower, "", function(v) cfg.JumpPower = v; applyMove() end)
 Toggle(funPage, "Noclip", "Проходить сквозь стены", false, function(v) cfg.Noclip = v end)
 Toggle(funPage, "Fly", "Телефон: джойстик + камера. ПК: WASD, Space/Shift", false, setFly)
-Slider(funPage, "Скорость полёта", 20, 300, cfg.FlySpeed, "", function(v) cfg.FlySpeed = v end)
+Slider(funPage, "Скорость полёта", 20, 500, cfg.FlySpeed, "", function(v) cfg.FlySpeed = v end)
+Toggle(funPage, "Invisible", "Скрыть своего персонажа", false, setInvisible)
 Section(funPage, "ПРОЧЕЕ")
 Toggle(funPage, "Anti-AFK", "Не даёт кикнуть за бездействие", true, function(v) cfg.AntiAFK = v end)
+Button(funPage, "Teleport To Spawn", "Телепорт на спавн", "Go", function()
+	local spawn = workspace:FindFirstChildOfClass("SpawnLocation")
+	local root = getRoot()
+	if spawn and root then root.CFrame = spawn.CFrame + Vector3.new(0, 5, 0) end
+end)
 Button(funPage, "Reset Character", "Перезайти персонажем", "Reset", function()
 	local h = getHum()
 	if h then h.Health = 0 end
 end)
 
+-- ESP
 local espPage = Tab("ESP")
 Section(espPage, "ИГРОКИ")
 Toggle(espPage, "ESP", "Подсветка игроков сквозь стены", false, function(v) cfg.ESP = v; refreshESP() end)
@@ -578,6 +1027,34 @@ do
 		refreshESP()
 	end)
 end
+
+-- Troll
+local trollPage = Tab("Troll")
+Section(trollPage, "ТРОЛЛИНГ")
+local Clicking = false
+Button(trollPage, "Click Others Blocks", "Кликнуть по блокам других игроков", "Click", function()
+	if Clicking then return end
+	if not needGame() then return end
+	Clicking = true
+	task.spawn(function()
+		pcall(function()
+			for _, Folder in ipairs(blocksFolder:GetChildren()) do
+				if Folder.Name ~= player.Name then
+					for _, Block in ipairs(Folder:GetChildren()) do
+						if Block.Name ~= "CameraDome" then
+							local Click = Block:FindFirstChildOfClass("ClickDetector")
+							if Click then
+								fireclickdetector(Click)
+								task.wait()
+							end
+						end
+					end
+				end
+			end
+		end)
+		Clicking = false
+	end)
+end)
 
 selectTab("Auto Farm")
 
