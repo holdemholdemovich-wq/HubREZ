@@ -354,7 +354,7 @@ local function buildCard(parent, g)
 	local aboutBox = new("Frame", { Position = UDim2.fromOffset(12, CARD_H + 48), Size = UDim2.new(1, -24, 0, 10),
 		BackgroundColor3 = C.bg, BorderSizePixel = 0, Visible = false }, card)
 	corner(aboutBox, 10)
-	local aboutL = label(aboutBox, g.about or "Описание пока не добавлено.", 13, C.mut, false)
+	local aboutL = label(aboutBox, g.about or "Описание пока не добавлено.", 13, Color3.fromRGB(205, 205, 225), false)
 	aboutL.TextWrapped = true
 	aboutL.TextYAlignment = Enum.TextYAlignment.Top
 	aboutL.Position, aboutL.Size = UDim2.fromOffset(10, 8), UDim2.new(1, -20, 1, -16)
