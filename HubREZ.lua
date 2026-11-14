@@ -213,7 +213,7 @@ local function selectTab(name)
 end
 local function newTab(name, text)
 	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
-		Text = text, TextColor3 = C.mut, TextSize = 14, Font = Enum.Font.GothamBold,
+		Text = text, TextColor3 = C.mut, TextSize = 13, TextWrapped = true, Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = nextOrder() }, side)
 	corner(b, 10)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 16) }, b)
@@ -226,8 +226,10 @@ end
 
 local gamesPage = newPage("Games")
 local favPage = newPage("Favorites")
+local aboutPage = newPage("About")
 newTab("Games", "Games")
 newTab("Favorites", "Favorites")
+newTab("About", "About the Hub")
 
 ---------------------------------------------------------------- Уведомления
 local toast = new("TextLabel", {
@@ -453,6 +455,34 @@ rebuildFavorites = function()
 	end
 end
 rebuildFavorites()
+---------------------------------------------------------------- About the Hub
+do
+	local ABOUT_TEXT = "HubREZ — коллекция скриптов для Roblox, созданная в 2026 году.\n\n"
+		.. "Возможности:\n"
+		.. "• Отдельные скрипты для каждой поддерживаемой игры, у каждого своё меню\n"
+		.. "• Избранное для быстрого доступа к нужным играм\n"
+		.. "• Работа на мобильных устройствах и ПК, сворачиваемое окно\n"
+		.. "• Регулярные обновления и расширение списка игр\n\n"
+		.. "Скрипты регулярно проходят проверку и обновляются при изменениях в играх. "
+		.. "Использование осуществляется на ваш страх и риск: защита от блокировки аккаунта не гарантируется."
+
+	section(aboutPage, "О ХАБЕ")
+	local box = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, aboutPage)
+	corner(box, 12)
+	stroke(box, C.line, 1)
+	new("UIPadding", { PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, box)
+	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, box)
+	local t = label(box, '<font color="#c084fc">Hub</font>REZ  <font color="#80809c" size="12">v1.0</font>', 20, C.txt, true)
+	t.Size, t.LayoutOrder = UDim2.new(1, 0, 0, 26), 1
+	local body = label(box, ABOUT_TEXT, 13, Color3.fromRGB(205, 205, 225), false)
+	body.Size = UDim2.new(1, 0, 0, 0)
+	body.AutomaticSize = Enum.AutomaticSize.Y
+	body.TextWrapped = true
+	body.TextYAlignment = Enum.TextYAlignment.Top
+	body.LayoutOrder = 2
+end
+
 selectTab("Games")
 
 ---------------------------------------------------------------- Свернуть / закрыть
