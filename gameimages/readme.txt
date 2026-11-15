@@ -1,1 +1,1 @@
-Game photos
+Game Photos
