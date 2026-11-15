@@ -33,7 +33,7 @@ local C = {
 	off = Color3.fromRGB(44, 44, 66), green = Color3.fromRGB(34, 197, 94),
 	red = Color3.fromRGB(239, 68, 68), gold = Color3.fromRGB(250, 204, 21),
 }
-local WIN_W, WIN_H, HEADER_H = 520, 340, 50
+local WIN_W, WIN_H, HEADER_H = 540, 390, 50
 local TI = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local conns, cleanups = {}, {}
@@ -88,6 +88,21 @@ local function makeDraggable(handle, target, onTap)
 	end))
 end
 
+local GITHUB_RAW = "https://raw.githubusercontent.com/holdemholdemovich-wq/HubREZ/main/"
+local function applyAsset(img, rel, onOk)
+	task.spawn(function()
+		local ok, a = pcall(function()
+			local path = "HubREZ_" .. rel:gsub("[/\\]", "_")
+			if not (isfile and isfile(path)) then writefile(path, game:HttpGet(GITHUB_RAW .. rel)) end
+			return (getcustomasset or getsynasset)(path)
+		end)
+		if ok and a and img.Parent then
+			img.Image = a
+			if onOk then onOk() end
+		end
+	end)
+end
+
 ---------------------------------------------------------------- GUI
 local GUI_NAME = "BabftREZ"
 local function getContainers()
@@ -135,9 +150,12 @@ gradient(winStroke, C.acc2, C.acc, 90)
 
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1 }, win)
 local title = label(header, '<font color="#c084fc">Babft</font>REZ', 20, C.txt, true)
-title.Position, title.Size = UDim2.fromOffset(18, 6), UDim2.new(0.6, 0, 0, 26)
+title.Position, title.Size = UDim2.fromOffset(54, 6), UDim2.new(0.6, 0, 0, 26)
+local logo = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 8), BackgroundTransparency = 1,
+	Image = "", ScaleType = Enum.ScaleType.Fit }, header)
+applyAsset(logo, "gameimages/logo.png")
 local sub = label(header, "Build A Boat For Treasure", 11, C.mut, false)
-sub.Position, sub.Size = UDim2.fromOffset(18, 30), UDim2.new(0.6, 0, 0, 14)
+sub.Position, sub.Size = UDim2.fromOffset(54, 30), UDim2.new(0.6, 0, 0, 14)
 new("Frame", { Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = C.line, BorderSizePixel = 0 }, header)
 
 local function headerBtn(text, index, hoverColor)
@@ -155,11 +173,28 @@ local bubbleBtn = headerBtn("–", 1, C.acc)
 makeDraggable(header, root)
 
 local body = new("Frame", { Position = UDim2.fromOffset(0, HEADER_H), Size = UDim2.new(1, 0, 1, -HEADER_H), BackgroundTransparency = 1 }, win)
-local side = new("Frame", { Size = UDim2.new(0, 120, 1, 0), BackgroundTransparency = 1 }, body)
+local side = new("Frame", { Size = UDim2.new(0, 132, 1, 0), BackgroundTransparency = 1 }, body)
 new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
 new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, side)
-new("Frame", { Position = UDim2.new(0, 120, 0, 8), Size = UDim2.new(0, 1, 1, -16), BackgroundColor3 = C.line, BorderSizePixel = 0 }, body)
-local content = new("Frame", { Position = UDim2.fromOffset(121, 0), Size = UDim2.new(1, -121, 1, 0), BackgroundTransparency = 1 }, body)
+new("Frame", { Position = UDim2.new(0, 132, 0, 8), Size = UDim2.new(0, 1, 1, -16), BackgroundColor3 = C.line, BorderSizePixel = 0 }, body)
+local content = new("Frame", { Position = UDim2.fromOffset(133, 0), Size = UDim2.new(1, -133, 1, 0), BackgroundTransparency = 1 }, body)
+
+-- профиль игрока внизу сайдбара
+do
+	local pc = new("Frame", { Position = UDim2.new(0, 10, 1, -58), Size = UDim2.fromOffset(112, 48),
+		BackgroundColor3 = C.card, BorderSizePixel = 0 }, body)
+	corner(pc, 12)
+	stroke(pc, C.line, 1)
+	local av = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(7, 7), BackgroundColor3 = C.bg, BorderSizePixel = 0,
+		Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150" }, pc)
+	corner(av, 17)
+	local nm = label(pc, player.DisplayName, 12, C.txt, true)
+	nm.Position, nm.Size = UDim2.fromOffset(46, 8), UDim2.new(1, -50, 0, 16)
+	nm.TextTruncate = Enum.TextTruncate.AtEnd
+	local un = label(pc, "@" .. player.Name, 10, C.mut, false)
+	un.Position, un.Size = UDim2.fromOffset(46, 25), UDim2.new(1, -50, 0, 14)
+	un.TextTruncate = Enum.TextTruncate.AtEnd
+end
 
 ---------------------------------------------------------------- Мини-библиотека интерфейса
 local pages, tabs = {}, {}
@@ -179,7 +214,7 @@ local function Tab(name)
 	new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14) }, p)
 	pages[name] = p
 
-	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
+	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
 		Text = name, TextColor3 = C.mut, TextSize = 14, Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = nextOrder() }, side)
 	corner(b, 10)
@@ -198,7 +233,9 @@ end
 local function card(page, h)
 	local f = new("Frame", { Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, page)
 	corner(f, 12)
-	stroke(f, C.line, 1)
+	local st = stroke(f, C.line, 1)
+	f.MouseEnter:Connect(function() TweenService:Create(st, TI, { Color = C.acc }):Play() end)
+	f.MouseLeave:Connect(function() TweenService:Create(st, TI, { Color = C.line }):Play() end)
 	return f
 end
 local function Toggle(page, text, subtext, default, cb)
@@ -1065,6 +1102,11 @@ local bubble = new("TextButton", { Size = UDim2.fromOffset(54, 54), Position = U
 	BackgroundColor3 = C.acc, AutoButtonColor = false, Visible = false, ZIndex = 50 }, gui)
 corner(bubble, 27)
 stroke(bubble, Color3.new(1, 1, 1), 1.5, 0.6)
+do
+	local bi = new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = "", ScaleType = Enum.ScaleType.Fit, ZIndex = 51 }, bubble)
+	corner(bi, 27)
+	applyAsset(bi, "gameimages/logo.png", function() bubble.Text = ""; bubble.BackgroundTransparency = 1 end)
+end
 
 local function setHidden(v)
 	hidden = v

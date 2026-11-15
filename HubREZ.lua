@@ -55,6 +55,32 @@ local function saveFavs()
 	end)
 end
 
+---------------------------------------------------------------- Конфиг хаба, ассеты
+local VERSION = "1.1"
+local hubCfg = { Watermark = true, Transparency = 0 }
+local closeHub = function() end -- задаётся ниже
+
+local assetCache = {}
+local function fetchAsset(rel)
+	if assetCache[rel] then return assetCache[rel] end
+	local path = "HubREZ_" .. rel:gsub("[/\\]", "_")
+	if not (isfile and isfile(path)) then
+		writefile(path, game:HttpGet(GITHUB_RAW .. rel))
+	end
+	local a = (getcustomasset or getsynasset)(path)
+	assetCache[rel] = a
+	return a
+end
+local function applyAsset(img, rel, onOk)
+	task.spawn(function()
+		local ok, a = pcall(fetchAsset, rel)
+		if ok and a and img.Parent then
+			img.Image = a
+			if onOk then onOk() end
+		end
+	end)
+end
+
 ---------------------------------------------------------------- Тема и помощники
 local C = {
 	bg = Color3.fromRGB(14, 14, 22), bg2 = Color3.fromRGB(24, 18, 42),
@@ -64,7 +90,7 @@ local C = {
 	off = Color3.fromRGB(44, 44, 66), green = Color3.fromRGB(34, 197, 94),
 	red = Color3.fromRGB(239, 68, 68), gold = Color3.fromRGB(250, 204, 21),
 }
-local WIN_W, WIN_H, HEADER_H, CARD_H = 520, 340, 50, 60
+local WIN_W, WIN_H, HEADER_H, CARD_H = 540, 370, 50, 60
 local TI = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local conns = {}
@@ -162,14 +188,17 @@ local winBg = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Co
 gradient(winBg, C.bg2, C.bg, 55)
 local winStroke = stroke(win, C.acc, 1.5, 0.35)
 gradient(winStroke, C.acc2, C.acc, 90)
-TweenService:Create(win, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
+TweenService:Create(win, TweenInfo.new(0.4), { GroupTransparency = hubCfg.Transparency / 100 }):Play()
 
 -- Заголовок
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1 }, win)
 local title = label(header, '<font color="#c084fc">Hub</font>REZ', 20, C.txt, true)
-title.Position, title.Size = UDim2.fromOffset(18, 6), UDim2.new(0.6, 0, 0, 26)
+title.Position, title.Size = UDim2.fromOffset(54, 6), UDim2.new(0.6, 0, 0, 26)
+local logo = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 8), BackgroundTransparency = 1,
+	Image = "", ScaleType = Enum.ScaleType.Fit }, header)
+applyAsset(logo, "gameimages/logo.png")
 local sub = label(header, "script hub  ·  mobile + PC", 11, C.mut, false)
-sub.Position, sub.Size = UDim2.fromOffset(18, 30), UDim2.new(0.6, 0, 0, 14)
+sub.Position, sub.Size = UDim2.fromOffset(54, 30), UDim2.new(0.6, 0, 0, 14)
 new("Frame", { Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = C.line, BorderSizePixel = 0 }, header)
 
 local function headerBtn(text, index, hoverColor)
@@ -188,11 +217,11 @@ makeDraggable(header, root)
 
 -- Тело
 local body = new("Frame", { Position = UDim2.fromOffset(0, HEADER_H), Size = UDim2.new(1, 0, 1, -HEADER_H), BackgroundTransparency = 1 }, win)
-local side = new("Frame", { Size = UDim2.new(0, 120, 1, 0), BackgroundTransparency = 1 }, body)
+local side = new("Frame", { Size = UDim2.new(0, 132, 1, 0), BackgroundTransparency = 1 }, body)
 new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
 new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, side)
-new("Frame", { Position = UDim2.new(0, 120, 0, 8), Size = UDim2.new(0, 1, 1, -16), BackgroundColor3 = C.line, BorderSizePixel = 0 }, body)
-local content = new("Frame", { Position = UDim2.fromOffset(121, 0), Size = UDim2.new(1, -121, 1, 0), BackgroundTransparency = 1 }, body)
+new("Frame", { Position = UDim2.new(0, 132, 0, 8), Size = UDim2.new(0, 1, 1, -16), BackgroundColor3 = C.line, BorderSizePixel = 0 }, body)
+local content = new("Frame", { Position = UDim2.fromOffset(133, 0), Size = UDim2.new(1, -133, 1, 0), BackgroundTransparency = 1 }, body)
 
 ---------------------------------------------------------------- Страницы / вкладки
 local pages, tabs = {}, {}
@@ -214,7 +243,7 @@ local function selectTab(name)
 	end
 end
 local function newTab(name, text)
-	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
+	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = C.acc, BackgroundTransparency = 1,
 		Text = text, TextColor3 = C.mut, TextSize = 13, TextWrapped = true, Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = nextOrder() }, side)
 	corner(b, 10)
@@ -228,10 +257,31 @@ end
 
 local gamesPage = newPage("Games")
 local favPage = newPage("Favorites")
+local updatesPage = newPage("Updates")
+local settingsPage = newPage("Settings")
 local aboutPage = newPage("About")
 newTab("Games", "Games")
 newTab("Favorites", "Favorites")
+newTab("Updates", "Updates")
+newTab("Settings", "Settings")
 newTab("About", "About the Hub")
+
+-- профиль игрока внизу сайдбара
+do
+	local pc = new("Frame", { Position = UDim2.new(0, 10, 1, -58), Size = UDim2.fromOffset(112, 48),
+		BackgroundColor3 = C.card, BorderSizePixel = 0 }, body)
+	corner(pc, 12)
+	stroke(pc, C.line, 1)
+	local av = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(7, 7), BackgroundColor3 = C.bg, BorderSizePixel = 0,
+		Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150" }, pc)
+	corner(av, 17)
+	local nm = label(pc, player.DisplayName, 12, C.txt, true)
+	nm.Position, nm.Size = UDim2.fromOffset(46, 8), UDim2.new(1, -50, 0, 16)
+	nm.TextTruncate = Enum.TextTruncate.AtEnd
+	local un = label(pc, "@" .. player.Name, 10, C.mut, false)
+	un.Position, un.Size = UDim2.fromOffset(46, 25), UDim2.new(1, -50, 0, 14)
+	un.TextTruncate = Enum.TextTruncate.AtEnd
+end
 
 ---------------------------------------------------------------- Уведомления
 local toast = new("TextLabel", {
@@ -266,6 +316,10 @@ end
 
 local function runGame(g, btn)
 	if btn:GetAttribute("busy") then return end
+	if g.status == "updating" then
+		showToast("Скрипт сейчас обновляется", C.gold)
+		return
+	end
 	local url = g.url or (g.file and (GITHUB_RAW .. g.file))
 	if not url or string.find(url, "YOUR_NAME", 1, true) then
 		showToast("Не указана ссылка на скрипт", C.gold)
@@ -322,35 +376,20 @@ local function favText(on)
 	return '<font color="' .. (on and "#facc15" or "#80809c") .. '">★</font>  In Favorites'
 end
 
--- Иконки игр: качаем картинку из репозитория, сохраняем файл и показываем через getcustomasset
-local iconCache = {}
 local function loadIcon(g, img, ph)
-	if not g.icon then return end
-	task.spawn(function()
-		local ok, asset = pcall(function()
-			if iconCache[g.icon] then return iconCache[g.icon] end
-			local path = "HubREZ_" .. g.icon:gsub("[/\\]", "_") -- без вложенных папок в файле на устройстве
-			if not (isfile and isfile(path)) then
-				writefile(path, game:HttpGet(GITHUB_RAW .. g.icon))
-			end
-			local a = (getcustomasset or getsynasset)(path)
-			iconCache[g.icon] = a
-			return a
-		end)
-		if ok and asset and img.Parent then
-			img.Image = asset
-			ph.Visible = false
-		end
-	end)
+	if g.icon then applyAsset(img, g.icon, function() ph.Visible = false end) end
 end
 
 local function buildCard(parent, g)
 	local card = new("Frame", { Size = UDim2.new(1, 0, 0, CARD_H), BackgroundColor3 = C.card, BorderSizePixel = 0,
 		ClipsDescendants = true, LayoutOrder = nextOrder() }, parent)
 	corner(card, 12)
-	stroke(card, C.line, 1)
+	local cardStroke = stroke(card, C.line, 1)
+	card:SetAttribute("gname", string.lower(g.name))
 
 	local head = new("TextButton", { Size = UDim2.new(1, 0, 0, CARD_H), BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, card)
+	head.MouseEnter:Connect(function() TweenService:Create(cardStroke, TI, { Color = C.acc }):Play() end)
+	head.MouseLeave:Connect(function() TweenService:Create(cardStroke, TI, { Color = C.line }):Play() end)
 	local icon = new("ImageLabel", { Size = UDim2.fromOffset(42, 42), Position = UDim2.fromOffset(10, 9),
 		BackgroundColor3 = C.bg, BorderSizePixel = 0, ScaleType = Enum.ScaleType.Crop, Image = "" }, head)
 	corner(icon, 9)
@@ -362,7 +401,8 @@ local function buildCard(parent, g)
 	local nameL = label(head, g.name, 14, C.txt, true)
 	nameL.Position, nameL.Size = UDim2.fromOffset(62, 10), UDim2.new(1, -142, 0, 20)
 	nameL.TextTruncate = Enum.TextTruncate.AtEnd
-	local subL = label(head, g.sub or "", 12, C.mut, false)
+	local dot = (g.status == "updating") and "#facc15" or "#22c55e"
+	local subL = label(head, '<font color="' .. dot .. '">●</font>  ' .. (g.sub or ""), 12, C.mut, false)
 	subL.Position, subL.Size = UDim2.fromOffset(62, 32), UDim2.new(1, -142, 0, 16)
 	subL.TextTruncate = Enum.TextTruncate.AtEnd
 	local star = label(head, "★", 18, C.gold, true)
@@ -473,7 +513,22 @@ local function reportError(where, err)
 	l.LayoutOrder = nextOrder()
 end
 
-section(gamesPage, "ДОСТУПНЫЕ ИГРЫ")
+section(gamesPage, "ДОСТУПНЫЕ ИГРЫ  —  " .. #GAMES)
+do
+	local search = new("TextBox", { Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = C.card, Text = "", PlaceholderText = "Поиск игры…",
+		PlaceholderColor3 = C.mut, TextColor3 = C.txt, Font = Enum.Font.Gotham, TextSize = 13, ClearTextOnFocus = false,
+		TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0, LayoutOrder = nextOrder() }, gamesPage)
+	corner(search, 10)
+	stroke(search, C.line, 1)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 12) }, search)
+	search:GetPropertyChangedSignal("Text"):Connect(function()
+		local q = string.lower(search.Text)
+		for _, ch in ipairs(gamesPage:GetChildren()) do
+			local n = ch:GetAttribute("gname")
+			if n then ch.Visible = (q == "" or string.find(n, q, 1, true) ~= nil) end
+		end
+	end)
+end
 for _, g in ipairs(GAMES) do
 	local ok, err = pcall(buildCard, gamesPage, g)
 	if not ok then reportError("Карточка «" .. tostring(g.name) .. "»", err) end
@@ -535,6 +590,165 @@ do
 	if not ok then reportError("About the Hub", err) end
 end
 
+---------------------------------------------------------------- Updates / Settings / водяной знак
+local CHANGELOG = {
+	{ v = "v1.1", date = "Ноябрь 2026", items = {
+		"Новый логотип и обновлённый интерфейс",
+		"Профиль игрока, поиск по списку игр",
+		"Вкладки Updates и Settings",
+		"Метки состояния скриптов",
+	} },
+	{ v = "v1.0", date = "Ноябрь 2026", items = {
+		"Запуск хаба",
+		"Игры: The Button, Build A Boat For Treasure",
+		"Избранное, описание игр, сворачивание в кружок",
+	} },
+}
+
+do
+	local ok, err = pcall(function()
+		section(updatesPage, "ИСТОРИЯ ОБНОВЛЕНИЙ")
+		for _, e in ipairs(CHANGELOG) do
+			local box = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, updatesPage)
+			corner(box, 12)
+			stroke(box, C.line, 1)
+			new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, box)
+			new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, box)
+			local t = label(box, '<font color="#c084fc">' .. e.v .. '</font>  <font color="#80809c" size="12">' .. e.date .. '</font>', 15, C.txt, true)
+			t.Size, t.LayoutOrder = UDim2.new(1, 0, 0, 20), 1
+			local lines = {}
+			for _, it in ipairs(e.items) do lines[#lines + 1] = "• " .. it end
+			local body2 = label(box, table.concat(lines, "\n"), 13, Color3.fromRGB(205, 205, 225), false)
+			body2.Size, body2.AutomaticSize = UDim2.new(1, 0, 0, 0), Enum.AutomaticSize.Y
+			body2.TextWrapped, body2.TextYAlignment, body2.LayoutOrder = true, Enum.TextYAlignment.Top, 2
+		end
+	end)
+	if not ok then reportError("Updates", err) end
+end
+
+local watermark = new("TextLabel", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -10, 1, -8), Size = UDim2.fromOffset(320, 16),
+	BackgroundTransparency = 1, Text = string.format("HubREZ v%s  ·  %s", VERSION, player.DisplayName), TextColor3 = Color3.new(1, 1, 1),
+	TextTransparency = 0.5, Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 3,
+	Visible = hubCfg.Watermark }, gui)
+
+do
+	local ok, err = pcall(function()
+		local function isPress(i) return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch end
+local function card(page, h)
+			local f = new("Frame", { Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, page)
+			corner(f, 12)
+			local st = stroke(f, C.line, 1)
+			f.MouseEnter:Connect(function() TweenService:Create(st, TI, { Color = C.acc }):Play() end)
+			f.MouseLeave:Connect(function() TweenService:Create(st, TI, { Color = C.line }):Play() end)
+			return f
+		end
+		local function Toggle(page, text, subtext, default, cb)
+			local row = card(page, 54)
+			local t = label(row, text, 14, C.txt, true)
+			t.Position, t.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -76, 0, 18)
+			local s = label(row, subtext, 12, C.mut, false)
+			s.Position, s.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -76, 0, 16)
+			local sw = new("TextButton", { Size = UDim2.fromOffset(46, 26), Position = UDim2.new(1, -60, 0.5, -13), Text = "", AutoButtonColor = false, BackgroundColor3 = C.off }, row)
+			corner(sw, 13)
+			local knob = new("Frame", { Size = UDim2.fromOffset(20, 20), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = Color3.fromRGB(154, 154, 181), BorderSizePixel = 0 }, sw)
+			corner(knob, 10)
+			local state = default
+			local function render(anim)
+				local info = anim and TI or TweenInfo.new(0)
+				TweenService:Create(sw, info, { BackgroundColor3 = state and C.acc or C.off }):Play()
+				TweenService:Create(knob, info, { Position = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3),
+					BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(154, 154, 181) }):Play()
+			end
+			render(false)
+			sw.MouseButton1Click:Connect(function()
+				state = not state
+				render(true)
+				cb(state)
+			end)
+		end
+		local function Slider(page, text, min, max, default, suffix, cb)
+			local row = card(page, 62)
+			local t = label(row, text, 14, C.txt, true)
+			t.Position, t.Size = UDim2.fromOffset(14, 8), UDim2.new(0.6, 0, 0, 18)
+			local v = label(row, "", 13, C.acc2, true)
+			v.TextXAlignment = Enum.TextXAlignment.Right
+			v.Position, v.Size = UDim2.new(0.5, 0, 0, 8), UDim2.new(0.5, -14, 0, 18)
+			local trackF = new("Frame", { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 6), BackgroundColor3 = C.off, BorderSizePixel = 0 }, row)
+			corner(trackF, 3)
+			local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.acc, BorderSizePixel = 0 }, trackF)
+			corner(fill, 3)
+			gradient(fill, C.acc, C.acc2)
+			local knob = new("Frame", { Size = UDim2.fromOffset(18, 18), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+				BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 2 }, trackF)
+			corner(knob, 9)
+			stroke(knob, C.acc, 2)
+			local hit = new("TextButton", { Position = UDim2.new(0, 0, 0, 28), Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Text = "", ZIndex = 3 }, row)
+			local value = default
+			local function render()
+				local a = (value - min) / (max - min)
+				fill.Size = UDim2.new(a, 0, 1, 0)
+				knob.Position = UDim2.new(a, 0, 0.5, 0)
+				v.Text = tostring(value) .. suffix
+			end
+			local dragging = false
+			local sf = page:FindFirstAncestorOfClass("ScrollingFrame") or page
+			local function setX(x)
+				local a = math.clamp((x - trackF.AbsolutePosition.X) / trackF.AbsoluteSize.X, 0, 1)
+				value = math.floor(min + (max - min) * a + 0.5)
+				render()
+				cb(value)
+			end
+			hit.InputBegan:Connect(function(i)
+				if isPress(i) then dragging = true; sf.ScrollingEnabled = false; setX(i.Position.X) end
+			end)
+			track(UserInputService.InputChanged:Connect(function(i)
+				if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then setX(i.Position.X) end
+			end))
+			track(UserInputService.InputEnded:Connect(function(i)
+				if dragging and isPress(i) then dragging = false; sf.ScrollingEnabled = true end
+			end))
+			render()
+		end
+		local function Button(page, text, subtext, btnText, cb)
+			local row = card(page, 54)
+			local t = label(row, text, 14, C.txt, true)
+			t.Position, t.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -110, 0, 18)
+			local s = label(row, subtext, 12, C.mut, false)
+			s.Position, s.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -110, 0, 16)
+			local b = new("TextButton", { Size = UDim2.fromOffset(80, 30), Position = UDim2.new(1, -94, 0.5, -15), Text = btnText,
+				TextColor3 = C.txt, Font = Enum.Font.GothamBold, TextSize = 12, BackgroundColor3 = C.acc, AutoButtonColor = false }, row)
+			corner(b, 9)
+			b.MouseButton1Click:Connect(function() cb(b) end)
+		end
+
+		section(settingsPage, "ИНТЕРФЕЙС")
+		Toggle(settingsPage, "Водяной знак", "Название хаба в углу экрана", hubCfg.Watermark, function(v)
+			hubCfg.Watermark = v
+			watermark.Visible = v
+		end)
+		Slider(settingsPage, "Прозрачность меню", 0, 60, hubCfg.Transparency, "%", function(v)
+			hubCfg.Transparency = v
+			win.GroupTransparency = v / 100
+		end)
+		section(settingsPage, "ХАБ")
+		Button(settingsPage, "Копировать загрузчик", "Строка запуска хаба в буфер обмена", "Copy", function()
+			if setclipboard then
+				setclipboard('loadstring(game:HttpGet("' .. GITHUB_RAW .. 'HubREZ.lua"))()')
+				showToast("Строка скопирована", C.green)
+			else
+				showToast("Буфер обмена не поддерживается", C.gold)
+			end
+		end)
+		Button(settingsPage, "Выгрузить хаб", "Полностью закрыть HubREZ", "Unload", function() closeHub() end)
+	end)
+	if not ok then reportError("Settings", err) end
+end
+
+task.delay(0.8, function()
+	if gui.Parent then showToast("Добро пожаловать, " .. player.DisplayName .. "!  Игр: " .. #GAMES, C.txt) end
+end)
+
 selectTab("Games")
 
 ---------------------------------------------------------------- Свернуть / закрыть
@@ -544,6 +758,11 @@ local bubble = new("TextButton", { Size = UDim2.fromOffset(54, 54), Position = U
 	BackgroundColor3 = C.acc, AutoButtonColor = false, Visible = false, ZIndex = 50 }, gui)
 corner(bubble, 27)
 stroke(bubble, Color3.new(1, 1, 1), 1.5, 0.6)
+do
+	local bi = new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = "", ScaleType = Enum.ScaleType.Fit, ZIndex = 51 }, bubble)
+	corner(bi, 27)
+	applyAsset(bi, "gameimages/logo.png", function() bubble.Text = ""; bubble.BackgroundTransparency = 1 end)
+end
 
 local function setHidden(v)
 	if suspended then return end
@@ -554,7 +773,7 @@ local function setHidden(v)
 	else
 		bubble.Visible = false
 		root.Visible = true
-		TweenService:Create(win, TI, { GroupTransparency = 0 }):Play()
+		TweenService:Create(win, TI, { GroupTransparency = hubCfg.Transparency / 100 }):Play()
 	end
 end
 setSuspended = function(v)
@@ -566,19 +785,20 @@ setSuspended = function(v)
 	else
 		hidden = false
 		root.Visible = true
-		TweenService:Create(win, TI, { GroupTransparency = 0 }):Play()
+		TweenService:Create(win, TI, { GroupTransparency = hubCfg.Transparency / 100 }):Play()
 	end
 end
 makeDraggable(bubble, bubble, function() setHidden(false) end)
 bubbleBtn.MouseButton1Click:Connect(function() setHidden(true) end)
-closeBtn.MouseButton1Click:Connect(function()
+closeHub = function()
 	for _, c in ipairs(conns) do c:Disconnect() end
 	TweenService:Create(win, TI, { GroupTransparency = 1 }):Play()
 	bubble.Visible = false
 	task.delay(0.3, function() gui:Destroy() end)
-end)
+end
+closeBtn.MouseButton1Click:Connect(function() closeHub() end)
 track(UserInputService.InputBegan:Connect(function(i, gp)
 	if not gp and i.KeyCode == Enum.KeyCode.RightShift then setHidden(not hidden) end
 end))
 
-TweenService:Create(win, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
+TweenService:Create(win, TweenInfo.new(0.4), { GroupTransparency = hubCfg.Transparency / 100 }):Play()
