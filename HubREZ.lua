@@ -25,7 +25,7 @@ local GAMES = {
 		name = "The Button",
 		sub = "TheButtonREZ  ·  ESP",
 		file = "TheButtonREZ_menu.lua",  -- имя файла в репозитории
-		icon = "thebutton.jpg",          -- картинка игры (лежит в репозитории)
+		icon = "gameimages/thebutton.png",          -- картинка игры (лежит в репозитории)
 		guiName = "TheButtonREZ",        -- имя окна скрипта: хаб прячется, пока оно открыто
 		placeId = nil, -- сюда можно вписать PlaceId игры, тогда хаб предупредит, если ты не в ней
 		about = "TheButtonREZ — меню для игры The Button.\n\nЧто умеет:\n• ESP: боксы, трейсеры, ники, здоровье, дистанция, скелет\n• Стрелки-указатели на игроков за экраном\n• Настройка цветов, толщины линий и дальности\n• Работает на телефоне и ПК, сворачивается в кружок\n\nМеню открывается после нажатия Execute.",
@@ -162,6 +162,7 @@ local winBg = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Co
 gradient(winBg, C.bg2, C.bg, 55)
 local winStroke = stroke(win, C.acc, 1.5, 0.35)
 gradient(winStroke, C.acc2, C.acc, 90)
+TweenService:Create(win, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
 
 -- Заголовок
 local header = new("Frame", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1 }, win)
@@ -328,7 +329,7 @@ local function loadIcon(g, img, ph)
 	task.spawn(function()
 		local ok, asset = pcall(function()
 			if iconCache[g.icon] then return iconCache[g.icon] end
-			local path = "HubREZ_" .. g.icon
+			local path = "HubREZ_" .. g.icon:gsub("[/\\]", "_") -- без вложенных папок в файле на устройстве
 			if not (isfile and isfile(path)) then
 				writefile(path, game:HttpGet(GITHUB_RAW .. g.icon))
 			end
@@ -463,8 +464,20 @@ local function section(parent, text)
 	return l
 end
 
+local function reportError(where, err)
+	warn("[HubREZ] " .. where .. ": " .. tostring(err))
+	local l = label(gamesPage, "⚠ " .. where .. ": " .. tostring(err), 12, C.red, false)
+	l.Size = UDim2.new(1, 0, 0, 44)
+	l.TextWrapped = true
+	l.TextYAlignment = Enum.TextYAlignment.Top
+	l.LayoutOrder = nextOrder()
+end
+
 section(gamesPage, "ДОСТУПНЫЕ ИГРЫ")
-for _, g in ipairs(GAMES) do buildCard(gamesPage, g) end
+for _, g in ipairs(GAMES) do
+	local ok, err = pcall(buildCard, gamesPage, g)
+	if not ok then reportError("Карточка «" .. tostring(g.name) .. "»", err) end
+end
 
 local favHolder
 rebuildFavorites = function()
@@ -487,9 +500,13 @@ rebuildFavorites = function()
 		e.LayoutOrder = nextOrder()
 	end
 end
-rebuildFavorites()
+do
+	local ok, err = pcall(rebuildFavorites)
+	if not ok then reportError("Избранное", err) end
+end
 ---------------------------------------------------------------- About the Hub
 do
+	local ok, err = pcall(function()
 	local ABOUT_TEXT = "HubREZ — коллекция скриптов для Roblox, созданная в 2026 году.\n\n"
 		.. "Возможности:\n"
 		.. "• Отдельные скрипты для каждой поддерживаемой игры, у каждого своё меню\n"
@@ -514,6 +531,8 @@ do
 	body.TextWrapped = true
 	body.TextYAlignment = Enum.TextYAlignment.Top
 	body.LayoutOrder = 2
+	end)
+	if not ok then reportError("About the Hub", err) end
 end
 
 selectTab("Games")
