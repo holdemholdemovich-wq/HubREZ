@@ -12,10 +12,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera or workspace:WaitForChild("Camera")
 
-local cfg = {
-	AutoFarm = false, AutoClaim = true, ClaimChest = true,
-	StartStage = 2, ChestClaimStage = 2, ChestClaimDelay = 1, StageTimeout = 8,
-}
+local cfg = { AutoFarm = false, ClaimChest = true }
 
 ---------------------------------------------------------------- Тема и помощники
 local C = {
@@ -429,15 +426,100 @@ end
 bindChar(player.Character)
 
 ---------------------------------------------------------------- AUTO FARM (улучшенная версия)
--- Один главный цикл вместо флагов и событий: не бывает двух фармов сразу и «зависшего» состояния.
+-- Параметры зафиксированы (самые быстрые из проверенных): игрок только включает/выключает фарм
+-- и решает, забирать ли сундук. Один главный цикл: не бывает двух фармов сразу и «зависшего» состояния.
 -- Каждый этап с таймаутом: при зависании — повтор, затем сброс персонажа и новый круг.
--- В конце круга персонаж удерживается на месте и сбрасывается сам, а не падает в воду.
+-- Все пути (этапы, сундук, награда) ищутся заново на каждом шаге, поэтому смена карты их не ломает.
+local FARM = { StartStage = 2, ChestStage = 5, ChestDelay = 1, StageTimeout = 3 }
 local setStatus = function() end
+local setStats = function() end
 local farmId = 0
 local Heartbeat = RunService.Heartbeat
 
 local function isAlive(hum) return hum ~= nil and hum.Parent ~= nil and hum.Health > 0 end
 local function active(id) return cfg.AutoFarm and farmId == id end
+
+---------------------------------------------------------------- Счётчик золота и таймер
+local session = { gained = 0, last = nil, startT = 0, endT = 0, running = false }
+local goldObj, goldTry = nil, 0
+
+local function findGoldObj()
+	local best
+	local function check(o)
+		if o:IsA("IntValue") or o:IsA("NumberValue") then
+			local n = string.lower(o.Name)
+			if n == "gold" then return o end
+			if not best and string.find(n, "gold", 1, true) then best = o end
+		end
+	end
+	for _, o in ipairs(player:GetChildren()) do
+		local r = check(o)
+		if r then return r end
+	end
+	for _, name in ipairs({ "Data", "leaderstats", "OtherData" }) do
+		local root = player:FindFirstChild(name)
+		if root then
+			for _, o in ipairs(root:GetDescendants()) do
+				local r = check(o)
+				if r then return r end
+			end
+		end
+	end
+	return best
+end
+
+local function readGold()
+	if not (goldObj and goldObj.Parent) then
+		if os.clock() - goldTry < 3 then return nil end
+		goldTry = os.clock()
+		goldObj = findGoldObj()
+	end
+	return goldObj and goldObj.Value or nil
+end
+
+local function fmtTime(sec)
+	sec = math.floor(sec)
+	local h, m, s = math.floor(sec / 3600), math.floor(sec / 60) % 60, sec % 60
+	if h > 0 then return string.format("%d:%02d:%02d", h, m, s) end
+	return string.format("%02d:%02d", m, s)
+end
+
+local function statsText()
+	local t = (session.running and os.clock() or session.endT) - session.startT
+	if t < 0 then t = 0 end
+	local gold = goldObj and ("+" .. session.gained) or "счётчик не найден"
+	local rate = (goldObj and t >= 30) and ("  ·  ~" .. math.floor(session.gained / t * 3600) .. "/час") or ""
+	return "Золото: " .. gold .. "  ·  Время: " .. fmtTime(t) .. rate
+end
+
+---------------------------------------------------------------- Пути (всегда свежие)
+local function farmRefs()
+	refreshPaths()
+	return Stages ~= nil and OtherData ~= nil
+end
+
+local chestCache
+local function findChestTrigger()
+	refreshPaths()
+	if ChestTrigger and ChestTrigger.Parent then return ChestTrigger end
+	if chestCache and chestCache.Parent then return chestCache end
+	local bs = workspace:FindFirstChild("BoatStages")
+	if bs then
+		for _, o in ipairs(bs:GetDescendants()) do
+			if o.Name == "GoldenChest" then
+				local tr = o:FindFirstChild("Trigger")
+				if tr and tr:IsA("BasePart") then chestCache = tr return tr end
+			end
+		end
+	end
+end
+
+local function fireClaim()
+	pcall(function()
+		local r = workspace:FindFirstChild("ClaimRiverResultsGold")
+		if r then r:FireServer() end
+	end)
+end
 
 local function zeroVelocity(char)
 	for _, p in ipairs(char:GetChildren()) do
@@ -476,10 +558,11 @@ end
 
 -- проход одного этапа. Возвращает: "ok" | "missing" | "timeout" | "dead" | "stopped"
 local function collectStage(n, id, char, hum)
+	farmRefs()
 	local stage = Stages and Stages:FindFirstChild("CaveStage" .. n)
 	local collect = stage and stage:FindFirstChild("DarknessPart")
 	if not collect then return "missing" end
-	local data = OtherData:FindFirstChild("Stage" .. (n - 1))
+	local data = OtherData and OtherData:FindFirstChild("Stage" .. (n - 1))
 	local t0 = os.clock()
 	while true do
 		Heartbeat:Wait()
@@ -487,41 +570,56 @@ local function collectStage(n, id, char, hum)
 		if not isAlive(hum) or not char.Parent then return "dead" end
 		char:PivotTo(collect.CFrame * CFrame.new(0, 0, -20))
 		zeroVelocity(char)
-		data = data or OtherData:FindFirstChild("Stage" .. (n - 1))
+		data = data or (OtherData and OtherData:FindFirstChild("Stage" .. (n - 1)))
 		local t = os.clock() - t0
 		if data then
 			if data.Value ~= "" then return "ok" end
 		elseif t > 0.5 then
 			return "ok" -- значения этапа нет в игре: не зависаем, идём дальше
 		end
-		if t > cfg.StageTimeout then return "timeout" end
+		if t > FARM.StageTimeout then return "timeout" end
 	end
 end
 
+-- забор сундука: триггер каждый кадр ищется заново (после смены карты старый объект пропадает)
 local chestBusy = false
 local function touchChest(id, char, hum)
-	local t0 = os.clock()
+	local t0, frames = os.clock(), 0
 	pcall(function()
 		repeat
-			local old = ChestTrigger.CFrame
-			ChestTrigger.CFrame = char:GetPivot()
-			Heartbeat:Wait()
-			ChestTrigger.CFrame = old
-			local e = OtherData:FindFirstChild("End")
-			if e and e.Value ~= "" then break end
+			local trig = findChestTrigger()
+			if trig and char.Parent then
+				local old = trig.CFrame
+				trig.CFrame = char:GetPivot()
+				local root = char:FindFirstChild("HumanoidRootPart")
+				if root and firetouchinterest then
+					pcall(firetouchinterest, root, trig, 0)
+					Heartbeat:Wait()
+					pcall(firetouchinterest, root, trig, 1)
+				else
+					Heartbeat:Wait()
+				end
+				pcall(function() trig.CFrame = old end)
+			else
+				Heartbeat:Wait()
+			end
+			frames += 1
+			local od = player:FindFirstChild("OtherData")
+			local e = od and od:FindFirstChild("End")
+			if frames >= 6 and e and e.Value ~= "" then break end
 		until not isAlive(hum) or not active(id) or os.clock() - t0 > 5
 	end)
 end
 
 -- один круг. Возвращает true, если персонажа нужно сбросить (круг пройден или завис)
 local function runCycle(id, char, hum)
-	if not refreshPaths() then
+	if not farmRefs() then
 		setStatus("Жду загрузки игры…")
 		task.wait(1)
 		return false
 	end
 	chestBusy = false
-	local stuck, n = 0, cfg.StartStage
+	local stuck, n = 0, FARM.StartStage
 	while n <= 10 do
 		if not active(id) or not isAlive(hum) then return false end
 		setStatus("Этап " .. n .. " / 10")
@@ -534,15 +632,14 @@ local function runCycle(id, char, hum)
 				return true
 			end
 			setStatus("Этап " .. n .. " завис, повтор " .. stuck)
-			refreshPaths()
 		else
 			stuck = 0
-			if n ~= cfg.ChestClaimStage then
-				if cfg.AutoClaim then pcall(function() ClaimRemote:FireServer() end) end
+			if n ~= FARM.ChestStage then
+				fireClaim()
 			elseif cfg.ClaimChest then
 				chestBusy = true
 				task.spawn(function()
-					task.wait(cfg.ChestClaimDelay)
+					task.wait(FARM.ChestDelay)
 					if active(id) and isAlive(hum) then touchChest(id, char, hum) end
 					chestBusy = false
 				end)
@@ -584,16 +681,21 @@ local function setAutoFarm(v)
 	cfg.AutoFarm = v
 	farmId += 1
 	if v then
+		session.gained, session.last = 0, readGold()
+		session.startT, session.running = os.clock(), true
 		setStatus("Запуск…")
 		if not refreshPaths() then notify("Ты не в BABFT или игра изменилась", C.red) end
 		task.spawn(farmLoop, farmId)
 	else
+		if session.running then session.running, session.endT = false, os.clock() end
 		setStatus("Выключен")
 	end
+	setStats(statsText())
 end
 cleanups[#cleanups + 1] = function()
 	cfg.AutoFarm = false
 	farmId += 1
+	session.running = false
 end
 
 ---------------------------------------------------------------- QUESTS (логика из BbaftoREZ)
@@ -884,13 +986,22 @@ end))
 local farmPage = Tab("Auto Farm")
 Section(farmPage, "АВТОФАРМ ЗОЛОТА")
 setStatus = Status(farmPage, "Выключен")
+setStats = Status(farmPage, statsText())
 Toggle(farmPage, "Auto Farm", "Проходит этапы и забирает золото", false, setAutoFarm)
-Slider(farmPage, "Стартовый этап", 1, 10, cfg.StartStage, "", function(v) cfg.StartStage = v end)
-Slider(farmPage, "Этап сундука", 1, 10, cfg.ChestClaimStage, "", function(v) cfg.ChestClaimStage = v end)
-Slider(farmPage, "Таймаут этапа", 3, 20, cfg.StageTimeout, " сек", function(v) cfg.StageTimeout = v end)
-Slider(farmPage, "Задержка сундука", 0, 5, cfg.ChestClaimDelay, " сек", function(v) cfg.ChestClaimDelay = v end)
-Toggle(farmPage, "Auto Claim Gold", "Забирать золото после этапов", true, function(v) cfg.AutoClaim = v end)
 Toggle(farmPage, "Claim Chest", "Забирать сундук в конце", true, function(v) cfg.ClaimChest = v end)
+task.spawn(function()
+	while gui.Parent do
+		if session.running then
+			local g = readGold()
+			if g then
+				if session.last and g > session.last then session.gained += g - session.last end
+				session.last = g
+			end
+		end
+		pcall(setStats, statsText())
+		task.wait(0.25)
+	end
+end)
 
 -- Quests
 local questPage = Tab("Quests")
