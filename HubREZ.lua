@@ -578,7 +578,7 @@ do
 	stroke(box, C.line, 1)
 	new("UIPadding", { PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, box)
 	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, box)
-	local t = label(box, '<font color="#c084fc">Hub</font>REZ  <font color="#80809c" size="12">v1.0</font>', 20, C.txt, true)
+	local t = label(box, '<font color="#c084fc">Hub</font>REZ  <font color="#80809c" size="12">v1.1</font>', 20, C.txt, true)
 	t.Size, t.LayoutOrder = UDim2.new(1, 0, 0, 26), 1
 	local body = label(box, ABOUT_TEXT, 13, Color3.fromRGB(205, 205, 225), false)
 	body.Size = UDim2.new(1, 0, 0, 0)
@@ -635,7 +635,7 @@ local watermark = new("TextLabel", { AnchorPoint = Vector2.new(1, 1), Position =
 do
 	local ok, err = pcall(function()
 		local function isPress(i) return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch end
-local function card(page, h)
+		local function card(page, h)
 			local f = new("Frame", { Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, page)
 			corner(f, 12)
 			local st = stroke(f, C.line, 1)
