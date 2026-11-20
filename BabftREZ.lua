@@ -1,6 +1,6 @@
 -- ============================================================
 -- BabftREZ — Build A Boat For Treasure
--- Auto Farm / Quests / Building (копирование баз) / Fun / ESP / Troll
+-- Auto Farm / Quests / Auto Build (копирование баз)
 -- Телефон + ПК. Запускать из HubREZ или напрямую в исполнителе.
 -- ============================================================
 local Players = game:GetService("Players")
@@ -12,16 +12,9 @@ local VirtualUser = game:GetService("VirtualUser")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera or workspace:WaitForChild("Camera")
 
-local PALETTE = {
-	Color3.fromRGB(139, 92, 246), Color3.fromRGB(34, 211, 238), Color3.fromRGB(244, 114, 182),
-	Color3.fromRGB(74, 222, 128), Color3.fromRGB(251, 146, 60), Color3.fromRGB(248, 250, 252),
-}
-
 local cfg = {
 	AutoFarm = false, AutoClaim = true, ClaimChest = true,
-	StartStage = 2, ChestClaimStage = 2, ChestClaimDelay = 1,
-	WalkSpeed = 16, JumpPower = 50, Noclip = false, Fly = false, FlySpeed = 60, AntiAFK = true,
-	ESP = false, ESPNames = true, ESPColor = PALETTE[1],
+	StartStage = 2, ChestClaimStage = 2, ChestClaimDelay = 1, StageTimeout = 8,
 }
 
 ---------------------------------------------------------------- Тема и помощники
@@ -435,9 +428,16 @@ local function bindChar(c)
 end
 bindChar(player.Character)
 
----------------------------------------------------------------- AUTO FARM (логика из BbaftoREZ)
+---------------------------------------------------------------- AUTO FARM (улучшенная версия)
+-- Один главный цикл вместо флагов и событий: не бывает двух фармов сразу и «зависшего» состояния.
+-- Каждый этап с таймаутом: при зависании — повтор, затем сброс персонажа и новый круг.
+-- В конце круга персонаж удерживается на месте и сбрасывается сам, а не падает в воду.
 local setStatus = function() end
-local farming, farmConn = false, nil
+local farmId = 0
+local Heartbeat = RunService.Heartbeat
+
+local function isAlive(hum) return hum ~= nil and hum.Parent ~= nil and hum.Health > 0 end
+local function active(id) return cfg.AutoFarm and farmId == id end
 
 local function zeroVelocity(char)
 	for _, p in ipairs(char:GetChildren()) do
@@ -448,82 +448,152 @@ local function zeroVelocity(char)
 	end
 end
 
-local function collectStage(n)
-	local stage = Stages:FindFirstChild("CaveStage" .. n)
-	local collect = stage and stage:FindFirstChild("DarknessPart")
-	if not collect then return end
-	local data = OtherData:FindFirstChild("Stage" .. (n - 1))
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not hum then return end
-	repeat
-		task.wait()
-		char = player.Character
-		if not char or not char.Parent then break end
-		char:PivotTo(collect.CFrame * CFrame.new(0, 0, -20))
-		zeroVelocity(char)
-	until (data and data.Value ~= "") or hum.Health <= 0 or not cfg.AutoFarm
+-- ждёт живого персонажа (после респавна)
+local function waitCharacter(id)
+	while active(id) do
+		local c = player.Character
+		local h = c and c:FindFirstChildOfClass("Humanoid")
+		local r = c and c:FindFirstChild("HumanoidRootPart")
+		if c and c.Parent and h and r and h.Health > 0 then return c, h end
+		Heartbeat:Wait()
+	end
 end
 
-local function touchChest()
-	task.spawn(function()
-		local char = player.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if not hum then return end
+-- надёжный сброс: Health = 0 + BreakJoints, с проверкой и повтором
+local function resetCharacter(char, hum)
+	for _ = 1, 4 do
+		if not isAlive(hum) then return true end
+		hum.Health = 0
+		pcall(function() char:BreakJoints() end)
+		local t0 = os.clock()
+		while os.clock() - t0 < 1.5 do
+			if not isAlive(hum) then return true end
+			Heartbeat:Wait()
+		end
+	end
+	return not isAlive(hum)
+end
+
+-- проход одного этапа. Возвращает: "ok" | "missing" | "timeout" | "dead" | "stopped"
+local function collectStage(n, id, char, hum)
+	local stage = Stages and Stages:FindFirstChild("CaveStage" .. n)
+	local collect = stage and stage:FindFirstChild("DarknessPart")
+	if not collect then return "missing" end
+	local data = OtherData:FindFirstChild("Stage" .. (n - 1))
+	local t0 = os.clock()
+	while true do
+		Heartbeat:Wait()
+		if not active(id) then return "stopped" end
+		if not isAlive(hum) or not char.Parent then return "dead" end
+		char:PivotTo(collect.CFrame * CFrame.new(0, 0, -20))
+		zeroVelocity(char)
+		data = data or OtherData:FindFirstChild("Stage" .. (n - 1))
+		local t = os.clock() - t0
+		if data then
+			if data.Value ~= "" then return "ok" end
+		elseif t > 0.5 then
+			return "ok" -- значения этапа нет в игре: не зависаем, идём дальше
+		end
+		if t > cfg.StageTimeout then return "timeout" end
+	end
+end
+
+local chestBusy = false
+local function touchChest(id, char, hum)
+	local t0 = os.clock()
+	pcall(function()
 		repeat
 			local old = ChestTrigger.CFrame
 			ChestTrigger.CFrame = char:GetPivot()
-			task.wait()
+			Heartbeat:Wait()
 			ChestTrigger.CFrame = old
-		until (OtherData:FindFirstChild("End") and OtherData.End.Value ~= "") or hum.Health <= 0 or not cfg.AutoFarm
+			local e = OtherData:FindFirstChild("End")
+			if e and e.Value ~= "" then break end
+		until not isAlive(hum) or not active(id) or os.clock() - t0 > 5
 	end)
 end
 
-local function farm()
-	if farming or not cfg.AutoFarm then return end
-	if not needGame() then return end
-	local char = player.Character or player.CharacterAdded:Wait()
-	local hum = char:WaitForChild("Humanoid")
-	farming = true
-	for n = cfg.StartStage, 10 do
-		if not cfg.AutoFarm or hum.Health <= 0 then break end
+-- один круг. Возвращает true, если персонажа нужно сбросить (круг пройден или завис)
+local function runCycle(id, char, hum)
+	if not refreshPaths() then
+		setStatus("Жду загрузки игры…")
+		task.wait(1)
+		return false
+	end
+	chestBusy = false
+	local stuck, n = 0, cfg.StartStage
+	while n <= 10 do
+		if not active(id) or not isAlive(hum) then return false end
 		setStatus("Этап " .. n .. " / 10")
-		local done = false
-		task.spawn(function() collectStage(n); done = true end)
-		repeat task.wait() until done or hum.Health <= 0 or not cfg.AutoFarm
-		if n ~= cfg.ChestClaimStage then
-			if cfg.AutoClaim then ClaimRemote:FireServer() end
-		elseif cfg.ClaimChest then
-			task.spawn(function()
-				task.wait(cfg.ChestClaimDelay)
-				touchChest()
-			end)
+		local res = collectStage(n, id, char, hum)
+		if res == "stopped" or res == "dead" then return false end
+		if res == "timeout" then
+			stuck += 1
+			if stuck >= 3 then
+				setStatus("Этап завис — перезапуск круга")
+				return true
+			end
+			setStatus("Этап " .. n .. " завис, повтор " .. stuck)
+			refreshPaths()
+		else
+			stuck = 0
+			if n ~= cfg.ChestClaimStage then
+				if cfg.AutoClaim then pcall(function() ClaimRemote:FireServer() end) end
+			elseif cfg.ClaimChest then
+				chestBusy = true
+				task.spawn(function()
+					task.wait(cfg.ChestClaimDelay)
+					if active(id) and isAlive(hum) then touchChest(id, char, hum) end
+					chestBusy = false
+				end)
+			end
+			n += 1
 		end
 	end
-	farming = false
-	if cfg.AutoFarm and hum.Health > 0 then
-		setStatus("Сброс персонажа…")
-		char:BreakJoints()
-	else
-		setStatus(cfg.AutoFarm and "Ждём респавн…" or "Выключен")
+	-- круг пройден: дожидаемся сундука, удерживая персонажа на месте (чтобы не упал в воду)
+	local hold, t0 = char:GetPivot(), os.clock()
+	while chestBusy and active(id) and isAlive(hum) and os.clock() - t0 < 6 do
+		Heartbeat:Wait()
+		char:PivotTo(hold)
+		zeroVelocity(char)
+	end
+	return true
+end
+
+local function farmLoop(id)
+	while active(id) do
+		local ok, err = pcall(function()
+			local char, hum = waitCharacter(id)
+			if not char then return end
+			local needReset = runCycle(id, char, hum)
+			if needReset and active(id) and isAlive(hum) then
+				setStatus("Сброс персонажа…")
+				resetCharacter(char, hum)
+			end
+			if active(id) then setStatus("Ждём респавн…") end
+		end)
+		if not ok then
+			warn("[BabftREZ] AutoFarm: " .. tostring(err))
+			setStatus("Ошибка, перезапуск…")
+			task.wait(1)
+		end
 	end
 end
 
 local function setAutoFarm(v)
 	cfg.AutoFarm = v
+	farmId += 1
 	if v then
-		if farmConn then farmConn:Disconnect() end
-		farmConn = player.CharacterAdded:Connect(function() task.spawn(farm) end)
 		setStatus("Запуск…")
-		task.spawn(farm)
+		if not refreshPaths() then notify("Ты не в BABFT или игра изменилась", C.red) end
+		task.spawn(farmLoop, farmId)
 	else
-		if farmConn then farmConn:Disconnect() farmConn = nil end
 		setStatus("Выключен")
 	end
 end
 cleanups[#cleanups + 1] = function()
 	cfg.AutoFarm = false
-	if farmConn then farmConn:Disconnect() end
+	farmId += 1
 end
 
 ---------------------------------------------------------------- QUESTS (логика из BbaftoREZ)
@@ -796,150 +866,18 @@ local function playerOptions()
 	return out
 end
 
----------------------------------------------------------------- FUN: скорость, прыжок, noclip, fly, invisible
-local function getHum()
-	local c = player.Character
-	return c and c:FindFirstChildOfClass("Humanoid")
-end
-local function getRoot()
-	local c = player.Character
-	return c and c:FindFirstChild("HumanoidRootPart")
-end
-local function applyMove()
-	local h = getHum()
-	if h then
-		h.WalkSpeed = cfg.WalkSpeed
-		h.UseJumpPower = true
-		h.JumpPower = cfg.JumpPower
-	end
-end
-
-local flyBV, flyBG
-local function stopFly()
-	if flyBV then flyBV:Destroy() flyBV = nil end
-	if flyBG then flyBG:Destroy() flyBG = nil end
-end
-local function startFly()
-	stopFly()
-	local root = getRoot()
-	if not root then return end
-	flyBV = new("BodyVelocity", { MaxForce = Vector3.one * 9e9, Velocity = Vector3.zero }, root)
-	flyBG = new("BodyGyro", { MaxTorque = Vector3.one * 9e9, P = 9e4, CFrame = root.CFrame }, root)
-end
-local function setFly(v)
-	cfg.Fly = v
-	if v then startFly() else stopFly() end
-end
-
-track(RunService.RenderStepped:Connect(function()
-	-- полёт: на телефоне джойстик + наклон камеры, на ПК WASD + Space/Shift
-	if cfg.Fly and flyBV and flyBV.Parent then
-		local hum = getHum()
-		local cam = workspace.CurrentCamera
-		if hum and cam then
-			local look, right = cam.CFrame.LookVector, cam.CFrame.RightVector
-			local fl, fr = Vector3.new(look.X, 0, look.Z), Vector3.new(right.X, 0, right.Z)
-			if fl.Magnitude > 0.001 then fl = fl.Unit end
-			if fr.Magnitude > 0.001 then fr = fr.Unit end
-			local md = hum.MoveDirection
-			local move = look * md:Dot(fl) + right * md:Dot(fr)
-			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
-			if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then move -= Vector3.new(0, 1, 0) end
-			if move.Magnitude > 1 then move = move.Unit end
-			flyBV.Velocity = move * cfg.FlySpeed
-			flyBG.CFrame = cam.CFrame
-		end
-	end
-end))
-
-track(RunService.Stepped:Connect(function()
-	if cfg.Noclip then
-		local c = player.Character
-		if c then
-			for _, p in ipairs(c:GetDescendants()) do
-				if p:IsA("BasePart") then p.CanCollide = false end
-			end
-		end
-	end
-end))
-
+---------------------------------------------------------------- Персонаж и Anti-AFK
 track(player.CharacterAdded:Connect(function(c)
 	c:WaitForChild("Humanoid")
 	c:WaitForChild("HumanoidRootPart")
 	bindChar(c)
-	task.wait(0.3)
-	applyMove()
-	if cfg.Fly then startFly() end
 end))
-cleanups[#cleanups + 1] = stopFly
 
+-- Anti-AFK всегда включён: фарм не кикает за бездействие
 track(player.Idled:Connect(function()
-	if cfg.AntiAFK then
-		VirtualUser:CaptureController()
-		VirtualUser:ClickButton2(Vector2.new())
-	end
+	VirtualUser:CaptureController()
+	VirtualUser:ClickButton2(Vector2.new())
 end))
-
-local function setInvisible(v)
-	local c = player.Character
-	if not c then return end
-	for _, part in ipairs(c:GetDescendants()) do
-		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-			part.Transparency = v and 1 or 0
-			part.CanCollide = not v
-		end
-	end
-end
-
----------------------------------------------------------------- ESP (подсветка + ники)
-local function clearESP()
-	for _, plr in ipairs(Players:GetPlayers()) do
-		local c = plr.Character
-		if c then
-			local hl = c:FindFirstChild("REZ_ESP")
-			if hl then hl:Destroy() end
-			local head = c:FindFirstChild("Head")
-			local bb = head and head:FindFirstChild("REZ_NAME")
-			if bb then bb:Destroy() end
-		end
-	end
-end
-local function refreshESP()
-	for _, plr in ipairs(Players:GetPlayers()) do
-		local c = plr ~= player and plr.Character
-		if c then
-			local hl = c:FindFirstChild("REZ_ESP")
-			if cfg.ESP then
-				if not hl then
-					hl = new("Highlight", { Name = "REZ_ESP", FillTransparency = 0.6, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, c)
-				end
-				hl.FillColor, hl.OutlineColor = cfg.ESPColor, cfg.ESPColor
-			elseif hl then
-				hl:Destroy()
-			end
-			local head = c:FindFirstChild("Head")
-			local bb = head and head:FindFirstChild("REZ_NAME")
-			if cfg.ESP and cfg.ESPNames and head then
-				if not bb then
-					bb = new("BillboardGui", { Name = "REZ_NAME", AlwaysOnTop = true, Size = UDim2.fromOffset(140, 20), StudsOffset = Vector3.new(0, 2.5, 0) }, head)
-					new("TextLabel", { Name = "T", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-						TextSize = 14, TextStrokeTransparency = 0.3 }, bb)
-				end
-				bb.T.Text = plr.DisplayName
-				bb.T.TextColor3 = cfg.ESPColor
-			elseif bb then
-				bb:Destroy()
-			end
-		end
-	end
-end
-task.spawn(function()
-	while gui.Parent do
-		pcall(refreshESP)
-		task.wait(0.5)
-	end
-end)
-cleanups[#cleanups + 1] = clearESP
 
 ---------------------------------------------------------------- Вкладки
 -- Auto Farm
@@ -949,6 +887,7 @@ setStatus = Status(farmPage, "Выключен")
 Toggle(farmPage, "Auto Farm", "Проходит этапы и забирает золото", false, setAutoFarm)
 Slider(farmPage, "Стартовый этап", 1, 10, cfg.StartStage, "", function(v) cfg.StartStage = v end)
 Slider(farmPage, "Этап сундука", 1, 10, cfg.ChestClaimStage, "", function(v) cfg.ChestClaimStage = v end)
+Slider(farmPage, "Таймаут этапа", 3, 20, cfg.StageTimeout, " сек", function(v) cfg.StageTimeout = v end)
 Slider(farmPage, "Задержка сундука", 0, 5, cfg.ChestClaimDelay, " сек", function(v) cfg.ChestClaimDelay = v end)
 Toggle(farmPage, "Auto Claim Gold", "Забирать золото после этапов", true, function(v) cfg.AutoClaim = v end)
 Toggle(farmPage, "Claim Chest", "Забирать сундук в конце", true, function(v) cfg.ClaimChest = v end)
@@ -1028,70 +967,6 @@ do
 	end))
 end
 Toggle(buildPage, "Ignore Anchored State", "Не учитывать закрепление блоков", true, function(v) ignoreAnchored = v end)
-
--- Fun
-local funPage = Tab("Fun")
-Section(funPage, "ДВИЖЕНИЕ")
-Slider(funPage, "Скорость", 16, 200, cfg.WalkSpeed, "", function(v) cfg.WalkSpeed = v; applyMove() end)
-Slider(funPage, "Прыжок", 50, 500, cfg.JumpPower, "", function(v) cfg.JumpPower = v; applyMove() end)
-Toggle(funPage, "Noclip", "Проходить сквозь стены", false, function(v) cfg.Noclip = v end)
-Toggle(funPage, "Fly", "Телефон: джойстик + камера. ПК: WASD, Space/Shift", false, setFly)
-Slider(funPage, "Скорость полёта", 20, 500, cfg.FlySpeed, "", function(v) cfg.FlySpeed = v end)
-Toggle(funPage, "Invisible", "Скрыть своего персонажа", false, setInvisible)
-Section(funPage, "ПРОЧЕЕ")
-Toggle(funPage, "Anti-AFK", "Не даёт кикнуть за бездействие", true, function(v) cfg.AntiAFK = v end)
-Button(funPage, "Teleport To Spawn", "Телепорт на спавн", "Go", function()
-	local spawn = workspace:FindFirstChildOfClass("SpawnLocation")
-	local root = getRoot()
-	if spawn and root then root.CFrame = spawn.CFrame + Vector3.new(0, 5, 0) end
-end)
-Button(funPage, "Reset Character", "Перезайти персонажем", "Reset", function()
-	local h = getHum()
-	if h then h.Health = 0 end
-end)
-
--- ESP
-local espPage = Tab("ESP")
-Section(espPage, "ИГРОКИ")
-Toggle(espPage, "ESP", "Подсветка игроков сквозь стены", false, function(v) cfg.ESP = v; refreshESP() end)
-Toggle(espPage, "Ники", "Имя над головой", true, function(v) cfg.ESPNames = v; refreshESP() end)
-do
-	local idx = 1
-	Button(espPage, "Цвет", "Нажми, чтобы сменить", "Сменить", function(b)
-		idx = idx % #PALETTE + 1
-		cfg.ESPColor = PALETTE[idx]
-		b.BackgroundColor3 = PALETTE[idx]
-		refreshESP()
-	end)
-end
-
--- Troll
-local trollPage = Tab("Troll")
-Section(trollPage, "ТРОЛЛИНГ")
-local Clicking = false
-Button(trollPage, "Click Others Blocks", "Кликнуть по блокам других игроков", "Click", function()
-	if Clicking then return end
-	if not needGame() then return end
-	Clicking = true
-	task.spawn(function()
-		pcall(function()
-			for _, Folder in ipairs(blocksFolder:GetChildren()) do
-				if Folder.Name ~= player.Name then
-					for _, Block in ipairs(Folder:GetChildren()) do
-						if Block.Name ~= "CameraDome" then
-							local Click = Block:FindFirstChildOfClass("ClickDetector")
-							if Click then
-								fireclickdetector(Click)
-								task.wait()
-							end
-						end
-					end
-				end
-			end
-		end)
-		Clicking = false
-	end)
-end)
 
 selectTab("Auto Farm")
 
