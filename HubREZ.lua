@@ -19,16 +19,26 @@ local GITHUB_RAW = "https://raw.githubusercontent.com/holdemholdemovich-wq/HubRE
 --    Файл должен возвращать такую же таблицу, как GAMES ниже: return { {...}, {...} }
 local GAMES_LIST_URL = GITHUB_RAW .. "games.lua"  -- список игр лежит в репозитории
 
--- 3) Список игр. Чтобы добавить новую — просто добавь ещё один блок { ... }
+-- 3) Запасной список игр (копия games.lua). Основной список хаб берёт из games.lua в репозитории.
 local GAMES = {
 	{
 		name = "The Button",
 		sub = "TheButtonREZ  ·  ESP",
-		file = "TheButtonREZ_menu.lua",  -- имя файла в репозитории
-		icon = "gameimages/thebutton.png",          -- картинка игры (лежит в репозитории)
-		guiName = "TheButtonREZ",        -- имя окна скрипта: хаб прячется, пока оно открыто
-		placeId = nil, -- сюда можно вписать PlaceId игры, тогда хаб предупредит, если ты не в ней
-		about = "TheButtonREZ — меню для игры The Button.\n\nЧто умеет:\n• ESP: боксы, трейсеры, ники, здоровье, дистанция, скелет\n• Стрелки-указатели на игроков за экраном\n• Настройка цветов, толщины линий и дальности\n• Работает на телефоне и ПК, сворачивается в кружок\n\nМеню открывается после нажатия Execute.",
+		file = "TheButtonREZ_menu.lua",
+		icon = "gameimages/thebutton.png",
+		guiName = "TheButtonREZ",
+		status = "ok", -- "ok" = работает, "updating" = временно обновляется
+		about = "TheButtonREZ — меню для игры The Button.\n\nЧто умеет:\n• ESP: боксы, трейсеры, ники, здоровье, дистанция, скелет\n• Стрелки-указатели на игроков за экраном\n• Настройка цветов, толщины линий и дальности\n• Работает на телефоне и ПК, сворачивается в кружок\n\nМеню открывается после нажатия Execute.\n\n✔ Пока без банов — следим за обновлениями игры\n✔ Скрипт регулярно проходит проверку на чистоту\n\n<font color=\"#6b6b85\" size=\"11\">За слишком агрессивное использование скрипта вы не защищены от бана.</font>",
+	},
+	{
+		name = "Build A Boat For Treasure",
+		sub = "BabftREZ  ·  Auto Farm",
+		file = "BabftREZ.lua",
+		icon = "gameimages/babft.png",
+		guiName = "BabftREZ",
+		status = "ok",
+		placeId = 537413528,
+		about = "BabftREZ — меню для Build A Boat For Treasure.\n\nЧто умеет:\n• Auto Farm: проходит этапы, забирает золото и сундук\n• Quests: выполняет квесты\n• Auto Build: копирование баз других игроков и постройка у себя\n• Fun: скорость, прыжок, Noclip, Fly, Invisible\n• ESP игроков с никами и выбором цвета\n• Troll, Anti-AFK, Reset Character\n\nЗапускай внутри игры, на старте забега.\n\n✔ Пока без банов — следим за обновлениями игры\n✔ Скрипт регулярно проходит проверку на чистоту\n\n<font color=\"#6b6b85\" size=\"11\">За слишком агрессивное использование скрипта вы не защищены от бана.</font>",
 	},
 }
 
@@ -38,6 +48,16 @@ local function nocache(u) return u .. (u:find("?", 1, true) and "&" or "?") .. "
 if GAMES_LIST_URL then
 	local ok, res = pcall(function() return loadstring(game:HttpGet(nocache(GAMES_LIST_URL)))() end)
 	if ok and typeof(res) == "table" then GAMES = res end
+end
+
+-- игра, в которой ты сейчас находишься (по PlaceId), встаёт в списке первой
+do
+	local here, rest = {}, {}
+	for _, g in ipairs(GAMES) do
+		if g.placeId and g.placeId == game.PlaceId then here[#here + 1] = g else rest[#rest + 1] = g end
+	end
+	for _, g in ipairs(rest) do here[#here + 1] = g end
+	GAMES = here
 end
 
 ---------------------------------------------------------------- Избранное (сохраняется в файл, если исполнитель умеет)
@@ -56,7 +76,7 @@ local function saveFavs()
 end
 
 ---------------------------------------------------------------- Конфиг хаба, ассеты
-local VERSION = "1.1"
+local VERSION = "1.2"
 local hubCfg = { Watermark = true, Transparency = 0 }
 local closeHub = function() end -- задаётся ниже
 
@@ -402,7 +422,8 @@ local function buildCard(parent, g)
 	nameL.Position, nameL.Size = UDim2.fromOffset(62, 10), UDim2.new(1, -142, 0, 20)
 	nameL.TextTruncate = Enum.TextTruncate.AtEnd
 	local dot = (g.status == "updating") and "#facc15" or "#22c55e"
-	local subL = label(head, '<font color="' .. dot .. '">●</font>  ' .. (g.sub or ""), 12, C.mut, false)
+	local here = g.placeId ~= nil and g.placeId == game.PlaceId
+	local subL = label(head, '<font color="' .. dot .. '">●</font>  ' .. (g.sub or "") .. (here and '  ·  <font color="#c084fc">Вы здесь</font>' or ""), 12, C.mut, false)
 	subL.Position, subL.Size = UDim2.fromOffset(62, 32), UDim2.new(1, -142, 0, 16)
 	subL.TextTruncate = Enum.TextTruncate.AtEnd
 	local star = label(head, "★", 18, C.gold, true)
@@ -544,7 +565,8 @@ rebuildFavorites = function()
 	for _, g in ipairs(GAMES) do
 		if Favs[g.name] then
 			any = true
-			buildCard(favPage, g)
+			local ok, err = pcall(buildCard, favPage, g)
+			if not ok then warn("[HubREZ] Избранное, карточка «" .. tostring(g.name) .. "»: " .. tostring(err)) end
 		end
 	end
 	if not any then
@@ -578,7 +600,7 @@ do
 	stroke(box, C.line, 1)
 	new("UIPadding", { PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, box)
 	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, box)
-	local t = label(box, '<font color="#c084fc">Hub</font>REZ  <font color="#80809c" size="12">v1.1</font>', 20, C.txt, true)
+	local t = label(box, '<font color="#c084fc">Hub</font>REZ  <font color="#80809c" size="12">v' .. VERSION .. '</font>', 20, C.txt, true)
 	t.Size, t.LayoutOrder = UDim2.new(1, 0, 0, 26), 1
 	local body = label(box, ABOUT_TEXT, 13, Color3.fromRGB(205, 205, 225), false)
 	body.Size = UDim2.new(1, 0, 0, 0)
@@ -592,6 +614,11 @@ end
 
 ---------------------------------------------------------------- Updates / Settings / водяной знак
 local CHANGELOG = {
+	{ v = "v1.2", date = "Ноябрь 2026", items = {
+		"Игра, в которой ты находишься, показывается первой с меткой «Вы здесь»",
+		"Запасной список игр синхронизирован с основным",
+		"Стабильность: сбой одной карточки не ломает избранное",
+	} },
 	{ v = "v1.1", date = "Ноябрь 2026", items = {
 		"Новый логотип и обновлённый интерфейс",
 		"Профиль игрока, поиск по списку игр",
@@ -746,7 +773,8 @@ do
 end
 
 task.delay(0.8, function()
-	if gui.Parent then showToast("Добро пожаловать, " .. player.DisplayName .. "!  Игр: " .. #GAMES, C.txt) end
+	if gui.Parent then local cur = GAMES[1] and GAMES[1].placeId == game.PlaceId and GAMES[1] or nil
+		showToast(cur and ("Ты в игре: " .. cur.name) or ("Добро пожаловать, " .. player.DisplayName .. "!  Игр: " .. #GAMES), C.txt) end
 end)
 
 selectTab("Games")
