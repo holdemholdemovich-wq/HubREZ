@@ -12,6 +12,11 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera or workspace:WaitForChild("Camera")
 
+-- если хаб уже запущен, сначала полностью выгружаем старую копию (иначе её циклы, например Fly, продолжат работать)
+local genv = (getgenv and getgenv()) or _G
+if typeof(genv.HubREZ_Unload) == "function" then pcall(genv.HubREZ_Unload) end
+genv.HubREZ_Unload = nil
+
 ---------------------------------------------------------------- НАСТРОЙКИ ХАБА
 -- 1) Залей скрипты на GitHub и впиши СВОЙ ник и репозиторий:
 local GITHUB_RAW = "https://raw.githubusercontent.com/holdemholdemovich-wq/HubREZ/main/"
@@ -114,7 +119,7 @@ local C = {
 	red = Color3.fromRGB(239, 68, 68), gold = Color3.fromRGB(250, 204, 21),
 }
 local WIN_W, WIN_H, HEADER_H, CARD_H = 540, 370, 50, 60
-local TI = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TI = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 
 local conns = {}
 local function track(c) conns[#conns + 1] = c return c end
@@ -144,10 +149,31 @@ end
 
 local function makeDraggable(handle, target, onTap)
 	local dragging, moved, startPos, startMouse = false, false, nil, nil
+	local startAbs, sizeAbs = Vector2.zero, Vector2.zero
+	local goal, cur = Vector2.zero, Vector2.zero
+	local follow = nil
+	local function stopFollow()
+		if follow then follow:Disconnect() follow = nil end
+	end
+	-- плавное «догоняние» курсора: движение не дёргается, даже если касания приходят редко
+	local function startFollow()
+		if follow then return end
+		follow = RunService.RenderStepped:Connect(function(dt)
+			if not target.Parent then stopFollow() return end
+			cur = cur:Lerp(goal, 1 - math.exp(-dt * 24))
+			local settled = not dragging and (goal - cur).Magnitude < 0.5
+			if settled then cur = goal end
+			target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + cur.X, startPos.Y.Scale, startPos.Y.Offset + cur.Y)
+			if settled then stopFollow() end
+		end)
+	end
 	handle.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging, moved = true, false
+			stopFollow()
 			startMouse, startPos = input.Position, target.Position
+			startAbs, sizeAbs = target.AbsolutePosition, target.AbsoluteSize
+			cur, goal = Vector2.zero, Vector2.zero
 			input.Changed:Connect(function()
 				if input.UserInputState == Enum.UserInputState.End then
 					dragging = false
@@ -161,10 +187,28 @@ local function makeDraggable(handle, target, onTap)
 			local d = input.Position - startMouse
 			if d.Magnitude > 6 then moved = true end
 			if moved then
-				target.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+				-- не даём окну и кружку уйти за границы экрана
+				local vp = camera.ViewportSize
+				local nx = math.clamp(startAbs.X + d.X, 0, math.max(0, vp.X - sizeAbs.X)) - startAbs.X
+				local ny = math.clamp(startAbs.Y + d.Y, 0, math.max(0, vp.Y - sizeAbs.Y)) - startAbs.Y
+				goal = Vector2.new(nx, ny)
+				startFollow()
 			end
 		end
 	end))
+end
+
+-- возвращает объект в экран, если он оказался за границей (например, после поворота телефона)
+local function keepOnScreen(obj)
+	task.defer(function()
+		if not obj.Parent then return end
+		local vp, ap, sz = camera.ViewportSize, obj.AbsolutePosition, obj.AbsoluteSize
+		local dx = math.clamp(ap.X, 0, math.max(0, vp.X - sz.X)) - ap.X
+		local dy = math.clamp(ap.Y, 0, math.max(0, vp.Y - sz.Y)) - ap.Y
+		if math.abs(dx) > 0.5 or math.abs(dy) > 0.5 then
+			obj.Position = obj.Position + UDim2.fromOffset(dx, dy)
+		end
+	end)
 end
 
 ---------------------------------------------------------------- GUI
@@ -258,7 +302,13 @@ local function newPage(name)
 	return p
 end
 local function selectTab(name)
+	local target = pages[name]
+	local wasShown = target and target.Visible
 	for n, p in pairs(pages) do p.Visible = (n == name) end
+	if target and not wasShown then
+		target.Position = UDim2.fromOffset(0, 12)
+		TweenService:Create(target, TI, { Position = UDim2.new() }):Play()
+	end
 	for n, t in pairs(tabs) do
 		local on = (n == name)
 		TweenService:Create(t.btn, TI, { BackgroundTransparency = on and 0.75 or 1, TextColor3 = on and C.txt or C.mut }):Play()
@@ -905,8 +955,8 @@ do
 				if not flyBV or flyBV.Parent ~= hrp then
 					if flyBV then flyBV:Destroy() end
 					if flyBG then flyBG:Destroy() end
-					flyBV = new("BodyVelocity", { MaxForce = Vector3.new(9e9, 9e9, 9e9), Velocity = Vector3.zero }, hrp)
-					flyBG = new("BodyGyro", { MaxTorque = Vector3.new(9e9, 9e9, 9e9), P = 9e4, D = 500, CFrame = cam.CFrame }, hrp)
+					flyBV = new("BodyVelocity", { Name = "HubREZ_FlyBV", MaxForce = Vector3.new(9e9, 9e9, 9e9), Velocity = Vector3.zero }, hrp)
+					flyBG = new("BodyGyro", { Name = "HubREZ_FlyBG", MaxTorque = Vector3.new(9e9, 9e9, 9e9), P = 9e4, D = 500, CFrame = cam.CFrame }, hrp)
 				end
 				hum.PlatformStand = true
 				local mv = getMoveVector(hum)
@@ -935,12 +985,25 @@ do
 		end))
 
 		playerCleanup = function()
+			local wasSpeed, wasJump, wasFly, wasNoclip = P.Speed, P.Jump, P.Fly or flyBV ~= nil, P.Noclip
 			P.Speed, P.Jump, P.Fly, P.Noclip = false, false, false, false
-			pcall(restoreSpeed)
-			pcall(restoreJump)
-			pcall(flyStop)
-			pcall(restoreCollide)
+			if wasSpeed then pcall(restoreSpeed) end
+			if wasJump then pcall(restoreJump) end
+			if wasFly then pcall(flyStop) end
+			if wasNoclip then pcall(restoreCollide) end
 			pcall(showFlyBtns, false)
+		end
+
+		-- остатки полёта от старой копии хаба (если она была запущена до обновления)
+		do
+			local ch0, hum0 = getChar()
+			if ch0 then
+				local found = false
+				for _, d in ipairs(ch0:GetDescendants()) do
+					if d.Name == "HubREZ_FlyBV" or d.Name == "HubREZ_FlyBG" then found = true; d:Destroy() end
+				end
+				if found and hum0 then hum0.PlatformStand = false end
+			end
 		end
 
 		section(playerPage, "БЕГ И ПРЫЖОК")
@@ -1006,7 +1069,7 @@ local function setHidden(v)
 	hidden = v
 	if v then
 		TweenService:Create(win, TI, { GroupTransparency = 1 }):Play()
-		task.delay(0.28, function() if hidden then root.Visible = false; bubble.Visible = true end end)
+		task.delay(0.28, function() if hidden then root.Visible = false; bubble.Visible = true; keepOnScreen(bubble) end end)
 	else
 		bubble.Visible = false
 		root.Visible = true
@@ -1026,8 +1089,13 @@ setSuspended = function(v)
 	end
 end
 makeDraggable(bubble, bubble, function() setHidden(false) end)
+track(camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+	keepOnScreen(root)
+	if bubble.Visible then keepOnScreen(bubble) end
+end))
 bubbleBtn.MouseButton1Click:Connect(function() setHidden(true) end)
 closeHub = function()
+	genv.HubREZ_Unload = nil
 	pcall(playerCleanup)
 	for _, c in ipairs(conns) do c:Disconnect() end
 	TweenService:Create(win, TI, { GroupTransparency = 1 }):Play()
@@ -1035,6 +1103,11 @@ closeHub = function()
 	task.delay(0.3, function() gui:Destroy() end)
 end
 closeBtn.MouseButton1Click:Connect(function() closeHub() end)
+genv.HubREZ_Unload = function()
+	pcall(playerCleanup)
+	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+	pcall(function() gui:Destroy() end)
+end
 track(UserInputService.InputBegan:Connect(function(i, gp)
 	if not gp and i.KeyCode == Enum.KeyCode.RightShift then setHidden(not hidden) end
 end))
