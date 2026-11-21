@@ -1,6 +1,6 @@
 -- ============================================================
 -- BabftREZ — Build A Boat For Treasure
--- Auto Farm / Quests / Auto Build (копирование баз)
+-- Auto Farm / Quests / Auto Build (копирование баз) / Player
 -- Телефон + ПК. Запускать из HubREZ или напрямую в исполнителе.
 -- ============================================================
 local Players = game:GetService("Players")
@@ -1078,6 +1078,223 @@ do
 	end))
 end
 Toggle(buildPage, "Ignore Anchored State", "Не учитывать закрепление блоков", true, function(v) ignoreAnchored = v end)
+
+---------------------------------------------------------------- Player (скорость, прыжок, полёт, ноуклип)
+do
+	local ok, err = pcall(function()
+		local P = { Speed = false, SpeedValue = 50, Jump = false, JumpValue = 100, Fly = false, FlySpeed = 60, Noclip = false }
+		local playerCleanup
+		local genv = (getgenv and getgenv()) or _G
+		if typeof(genv["BabftREZ_PlayerUnload"]) == "function" then pcall(genv["BabftREZ_PlayerUnload"]) end
+		genv["BabftREZ_PlayerUnload"] = nil
+
+		local RunService = game:GetService("RunService")
+		local weak = { __mode = "k" }
+		local origWalk, origJump, origUse, origCollide = setmetatable({}, weak), setmetatable({}, weak), setmetatable({}, weak), setmetatable({}, weak)
+		local upHeld, downHeld = false, false
+		local flyBV, flyBG, controls
+		local pconns, flyBtns = {}, {}
+
+		local function getChar()
+			local ch = player.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+			return ch, hum, hrp
+		end
+
+		-- вектор движения игрока в системе камеры: работает и с WASD, и с джойстиком на телефоне
+		local function findControls()
+			if controls then return end
+			pcall(function()
+				local ps = player:FindFirstChild("PlayerScripts")
+				local pm = ps and ps:FindFirstChild("PlayerModule")
+				if pm then controls = require(pm):GetControls() end
+			end)
+		end
+		local function getMoveVector(hum)
+			if controls then
+				local ok2, v = pcall(function() return controls:GetMoveVector() end)
+				if ok2 and typeof(v) == "Vector3" then return v end
+			end
+			local cam = workspace.CurrentCamera
+			if cam and hum then
+				local v = cam.CFrame:VectorToObjectSpace(hum.MoveDirection)
+				return Vector3.new(v.X, 0, v.Z)
+			end
+			return Vector3.zero
+		end
+
+		local function restoreSpeed()
+			local _, hum = getChar()
+			if hum and origWalk[hum] then hum.WalkSpeed = origWalk[hum] end
+		end
+		local function restoreJump()
+			local _, hum = getChar()
+			if hum and origJump[hum] then
+				hum.UseJumpPower = origUse[hum]
+				hum.JumpPower = origJump[hum]
+			end
+		end
+		local function restoreCollide()
+			local ch = player.Character
+			if not ch then return end
+			for _, p in ipairs(ch:GetDescendants()) do
+				if p:IsA("BasePart") and origCollide[p] ~= nil then p.CanCollide = origCollide[p] end
+			end
+		end
+		local function flyStop()
+			if flyBV then flyBV:Destroy() end
+			if flyBG then flyBG:Destroy() end
+			flyBV, flyBG = nil, nil
+			local _, hum = getChar()
+			if hum then
+				hum.PlatformStand = false
+				pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+			end
+		end
+
+		-- кнопки «Вверх» / «Вниз» для телефона (видны только пока включён Fly)
+		if UserInputService.TouchEnabled then
+			local function holdBtn(text, yOff, setter)
+				local b = new("TextButton", { Size = UDim2.fromOffset(64, 44), AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -16, 0.5, yOff), Text = text, TextSize = 13, Font = Enum.Font.GothamBold,
+					TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.acc, BackgroundTransparency = 0.25,
+					AutoButtonColor = false, Visible = false, ZIndex = 40 }, gui)
+				corner(b, 14)
+				stroke(b, Color3.new(1, 1, 1), 1.5, 0.6)
+				b.InputBegan:Connect(function(i)
+					if isPress(i) then
+						setter(true)
+						i.Changed:Connect(function()
+							if i.UserInputState == Enum.UserInputState.End then setter(false) end
+						end)
+					end
+				end)
+				flyBtns[#flyBtns + 1] = b
+			end
+			holdBtn("Вверх", -28, function(v) upHeld = v end)
+			holdBtn("Вниз", 28, function(v) downHeld = v end)
+		end
+		local function showFlyBtns(v)
+			for _, b in ipairs(flyBtns) do b.Visible = v end
+		end
+
+		-- основной цикл: скорость, прыжок, полёт
+		pconns[#pconns + 1] = RunService.Heartbeat:Connect(function()
+			local ch, hum, hrp = getChar()
+			if not hum then return end
+			if P.Speed then
+				if origWalk[hum] == nil then origWalk[hum] = hum.WalkSpeed end
+				hum.WalkSpeed = P.SpeedValue
+			end
+			if P.Jump then
+				if origJump[hum] == nil then origJump[hum], origUse[hum] = hum.JumpPower, hum.UseJumpPower end
+				hum.UseJumpPower = true
+				hum.JumpPower = P.JumpValue
+			end
+			if P.Fly and hrp and hum.Health > 0 then
+				local cam = workspace.CurrentCamera
+				if not cam then return end
+				if not flyBV or flyBV.Parent ~= hrp then
+					if flyBV then flyBV:Destroy() end
+					if flyBG then flyBG:Destroy() end
+					flyBV = new("BodyVelocity", { Name = "BabftREZ_FlyBV", MaxForce = Vector3.new(9e9, 9e9, 9e9), Velocity = Vector3.zero }, hrp)
+					flyBG = new("BodyGyro", { Name = "BabftREZ_FlyBG", MaxTorque = Vector3.new(9e9, 9e9, 9e9), P = 9e4, D = 500, CFrame = cam.CFrame }, hrp)
+				end
+				hum.PlatformStand = true
+				local mv = getMoveVector(hum)
+				local cf = cam.CFrame
+				local dir = cf.LookVector * -mv.Z + cf.RightVector * mv.X
+				local up = (upHeld or UserInputService:IsKeyDown(Enum.KeyCode.Space)) and 1 or 0
+				local down = (downHeld or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)) and 1 or 0
+				dir = dir + Vector3.new(0, up - down, 0)
+				if dir.Magnitude > 0 then dir = dir.Unit end
+				flyBV.Velocity = dir * P.FlySpeed
+				flyBG.CFrame = cf
+			end
+		end)
+
+		-- ноуклип: перед каждым шагом физики отключаем столкновения частей персонажа
+		pconns[#pconns + 1] = RunService.Stepped:Connect(function()
+			if not P.Noclip then return end
+			local ch = player.Character
+			if not ch then return end
+			for _, p in ipairs(ch:GetDescendants()) do
+				if p:IsA("BasePart") then
+					if origCollide[p] == nil then origCollide[p] = p.CanCollide end
+					if p.CanCollide then p.CanCollide = false end
+				end
+			end
+		end)
+
+		playerCleanup = function()
+			local wasSpeed, wasJump, wasFly, wasNoclip = P.Speed, P.Jump, P.Fly or flyBV ~= nil, P.Noclip
+			P.Speed, P.Jump, P.Fly, P.Noclip = false, false, false, false
+			upHeld, downHeld = false, false
+			if wasSpeed then pcall(restoreSpeed) end
+			if wasJump then pcall(restoreJump) end
+			if wasFly then pcall(flyStop) end
+			if wasNoclip then pcall(restoreCollide) end
+			for _, b in ipairs(flyBtns) do pcall(function() b:Destroy() end) end
+			for _, c in ipairs(pconns) do pcall(function() c:Disconnect() end) end
+			pconns = {}
+			if genv["BabftREZ_PlayerUnload"] == playerCleanup then genv["BabftREZ_PlayerUnload"] = nil end
+		end
+		genv["BabftREZ_PlayerUnload"] = playerCleanup
+
+		-- остатки полёта от прошлой копии этого скрипта
+		do
+			local ch0, hum0 = getChar()
+			if ch0 then
+				local found = false
+				for _, d in ipairs(ch0:GetDescendants()) do
+					if d.Name == "BabftREZ_FlyBV" or d.Name == "BabftREZ_FlyBG" then found = true; d:Destroy() end
+				end
+				if found and hum0 then hum0.PlatformStand = false end
+			end
+		end
+		local playerPage = Tab("Player")
+		Section(playerPage, "БЕГ И ПРЫЖОК")
+		Toggle(playerPage, "Скорость", "Быстрый бег по земле", false, function(v)
+			P.Speed = v
+			if not v then restoreSpeed() end
+		end)
+		Slider(playerPage, "Скорость бега", 16, 200, P.SpeedValue, "", function(v) P.SpeedValue = v end)
+		Toggle(playerPage, "Прыжок", "Высокий прыжок", false, function(v)
+			P.Jump = v
+			if not v then restoreJump() end
+		end)
+		Slider(playerPage, "Сила прыжка", 50, 300, P.JumpValue, "", function(v) P.JumpValue = v end)
+
+		Section(playerPage, "ПОЛЁТ И СТЕНЫ")
+		Toggle(playerPage, "Fly", "Полёт в сторону камеры", false, function(v)
+			P.Fly = v
+			if v then
+				task.spawn(findControls)
+				showFlyBtns(true)
+			else
+				upHeld, downHeld = false, false
+				showFlyBtns(false)
+				flyStop()
+			end
+		end)
+		Slider(playerPage, "Скорость полёта", 10, 250, P.FlySpeed, "", function(v) P.FlySpeed = v end)
+		Toggle(playerPage, "Noclip", "Проход сквозь стены", false, function(v)
+			P.Noclip = v
+			if not v then restoreCollide() end
+		end)
+
+		local hint = label(playerPage, "Fly: вперёд — туда, куда смотрит камера. Вверх и вниз: Space и Shift на ПК, кнопки справа на телефоне. "
+			.. "Чтобы лететь сквозь стены, включи ещё и Noclip. Не включай Fly во время Auto Farm. Использование на свой риск.", 12, C.mut, false)
+		hint.Size, hint.AutomaticSize = UDim2.new(1, 0, 0, 0), Enum.AutomaticSize.Y
+		hint.TextWrapped, hint.TextYAlignment, hint.LayoutOrder = true, Enum.TextYAlignment.Top, nextOrder()
+		cleanups[#cleanups + 1] = function() playerCleanup() end
+	end)
+	if not ok then
+		warn("[BabftREZ] Player: " .. tostring(err))
+		pcall(notify, "Player: ошибка, см. консоль", C.red)
+	end
+end
 
 selectTab("Auto Farm")
 
