@@ -148,7 +148,7 @@ local function label(parent, text, size, color, bold)
 end
 
 local function makeDraggable(handle, target, onTap)
-	local dragging, moved, startPos, startMouse = false, false, nil, nil
+	local dragging, moved, startPos, startMouse, dragInput = false, false, nil, nil, nil
 	local goal, cur = Vector2.zero, Vector2.zero
 	local follow = nil
 	local function stopFollow()
@@ -168,7 +168,7 @@ local function makeDraggable(handle, target, onTap)
 	end
 	handle.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging, moved = true, false
+			dragging, moved, dragInput = true, false, input
 			stopFollow()
 			startMouse, startPos = input.Position, target.Position
 			cur, goal = Vector2.zero, Vector2.zero
@@ -181,7 +181,9 @@ local function makeDraggable(handle, target, onTap)
 		end
 	end)
 	track(UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		-- касание считается только то же самое, которым начали тянуть (джойстик другим пальцем не двигает окно)
+		local mine = input.UserInputType == Enum.UserInputType.MouseMovement or (input.UserInputType == Enum.UserInputType.Touch and input == dragInput)
+		if dragging and mine then
 			local d = input.Position - startMouse
 			if d.Magnitude > 6 then moved = true end
 			if moved then
@@ -769,7 +771,7 @@ do
 				knob.Position = UDim2.new(a, 0, 0.5, 0)
 				v.Text = tostring(value) .. suffix
 			end
-			local dragging = false
+			local dragging, dragInput = false, nil
 			local sf = page:FindFirstAncestorOfClass("ScrollingFrame") or page
 			local function setX(x)
 				local a = math.clamp((x - trackF.AbsolutePosition.X) / trackF.AbsoluteSize.X, 0, 1)
@@ -778,13 +780,13 @@ do
 				cb(value)
 			end
 			hit.InputBegan:Connect(function(i)
-				if isPress(i) then dragging = true; sf.ScrollingEnabled = false; setX(i.Position.X) end
+				if isPress(i) then dragging, dragInput = true, i; sf.ScrollingEnabled = false; setX(i.Position.X) end
 			end)
 			track(UserInputService.InputChanged:Connect(function(i)
-				if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then setX(i.Position.X) end
+				if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or (i.UserInputType == Enum.UserInputType.Touch and i == dragInput)) then setX(i.Position.X) end
 			end))
 			track(UserInputService.InputEnded:Connect(function(i)
-				if dragging and isPress(i) then dragging = false; sf.ScrollingEnabled = true end
+				if dragging and isPress(i) and (i.UserInputType ~= Enum.UserInputType.Touch or i == dragInput) then dragging = false; sf.ScrollingEnabled = true end
 			end))
 			render()
 		end
