@@ -149,7 +149,6 @@ end
 
 local function makeDraggable(handle, target, onTap)
 	local dragging, moved, startPos, startMouse = false, false, nil, nil
-	local startAbs, sizeAbs = Vector2.zero, Vector2.zero
 	local goal, cur = Vector2.zero, Vector2.zero
 	local follow = nil
 	local function stopFollow()
@@ -172,7 +171,6 @@ local function makeDraggable(handle, target, onTap)
 			dragging, moved = true, false
 			stopFollow()
 			startMouse, startPos = input.Position, target.Position
-			startAbs, sizeAbs = target.AbsolutePosition, target.AbsoluteSize
 			cur, goal = Vector2.zero, Vector2.zero
 			input.Changed:Connect(function()
 				if input.UserInputState == Enum.UserInputState.End then
@@ -187,28 +185,11 @@ local function makeDraggable(handle, target, onTap)
 			local d = input.Position - startMouse
 			if d.Magnitude > 6 then moved = true end
 			if moved then
-				-- не даём окну и кружку уйти за границы экрана
-				local vp = camera.ViewportSize
-				local nx = math.clamp(startAbs.X + d.X, 0, math.max(0, vp.X - sizeAbs.X)) - startAbs.X
-				local ny = math.clamp(startAbs.Y + d.Y, 0, math.max(0, vp.Y - sizeAbs.Y)) - startAbs.Y
-				goal = Vector2.new(nx, ny)
+				goal = Vector2.new(d.X, d.Y)
 				startFollow()
 			end
 		end
 	end))
-end
-
--- возвращает объект в экран, если он оказался за границей (например, после поворота телефона)
-local function keepOnScreen(obj)
-	task.defer(function()
-		if not obj.Parent then return end
-		local vp, ap, sz = camera.ViewportSize, obj.AbsolutePosition, obj.AbsoluteSize
-		local dx = math.clamp(ap.X, 0, math.max(0, vp.X - sz.X)) - ap.X
-		local dy = math.clamp(ap.Y, 0, math.max(0, vp.Y - sz.Y)) - ap.Y
-		if math.abs(dx) > 0.5 or math.abs(dy) > 0.5 then
-			obj.Position = obj.Position + UDim2.fromOffset(dx, dy)
-		end
-	end)
 end
 
 ---------------------------------------------------------------- GUI
@@ -1069,7 +1050,7 @@ local function setHidden(v)
 	hidden = v
 	if v then
 		TweenService:Create(win, TI, { GroupTransparency = 1 }):Play()
-		task.delay(0.28, function() if hidden then root.Visible = false; bubble.Visible = true; keepOnScreen(bubble) end end)
+		task.delay(0.28, function() if hidden then root.Visible = false; bubble.Visible = true end end)
 	else
 		bubble.Visible = false
 		root.Visible = true
@@ -1089,10 +1070,6 @@ setSuspended = function(v)
 	end
 end
 makeDraggable(bubble, bubble, function() setHidden(false) end)
-track(camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-	keepOnScreen(root)
-	if bubble.Visible then keepOnScreen(bubble) end
-end))
 bubbleBtn.MouseButton1Click:Connect(function() setHidden(true) end)
 closeHub = function()
 	genv.HubREZ_Unload = nil
