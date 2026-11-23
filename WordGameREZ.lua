@@ -21,6 +21,7 @@ local Settings = {
 	Delay = 150,       -- пауза между нажатиями клавиш (мс)
 	ThinkTime = 800,   -- пауза перед началом ответа (мс)
 	HardEnds = true,   -- выбирать слова, заканчивающиеся на «трудные» буквы
+	WatchWorld = true, -- читать слова противника с экрана и из мира
 }
 
 ---------------------------------------------------------------- Помощники
@@ -122,8 +123,18 @@ local function loadWords()
 	if wordCount < 500 then for w in FALLBACK:gmatch("%S+") do addWord(w) end end
 end
 
+---------------------------------------------------------------- Журнал
+local logLines = {}
+local onLog = function() end
+local function log(msg)
+	logLines[#logLines + 1] = os.date("%H:%M:%S") .. "  " .. msg
+	if #logLines > 14 then table.remove(logLines, 1) end
+	onLog()
+end
+
 ---------------------------------------------------------------- Поиск элементов игры на экране
 local pg = player:WaitForChild("PlayerGui")
+local selfGui = nil -- наше меню (чтобы не читать его тексты)
 
 local function visible(o)
 	local cur = o
@@ -141,7 +152,7 @@ local function norm(t)
 	return lowerRu(t)
 end
 
--- по чему тапать: ближайшая кнопка (или сам объект — тап идёт по координатам)
+-- по чему тапать: ближайшая кнопка (или сам объект: тап идёт по координатам)
 local function tapTarget(o)
 	local cur = o
 	while cur and cur ~= pg do
@@ -152,32 +163,41 @@ local function tapTarget(o)
 end
 
 local function pathOf(o)
-	local p = o:GetFullName()
-	return (p:gsub("^.-PlayerGui%.", ""))
+	return (o:GetFullName():gsub("^.-PlayerGui%.", ""))
 end
 
--- клавиатура: одиночные русские буквы, собранные в один контейнер (≥20 штук); нужная буква — одиночная буква ВНЕ клавиатуры
+local function isWordLike(clean)
+	local n = utf8.len(clean)
+	if not n or n < 3 or n > 16 then return false end
+	for _, cp in utf8.codes(clean) do if not isCyr(cp) then return false end end
+	return true
+end
+
+-- Один проход по экрану: клавиатура (одинаковые по размеру кнопки-буквы), «Ввод/Стереть», поле со словом (буквы в строку), слова на экране
 local function scan()
-	local singles, enter, erase, eraseAll = {}, nil, nil, nil
+	local singles, words, texts = {}, {}, {}
+	local enter, erase, eraseAll
 	local stat = { texts = 0, single = 0, hidden = 0, hiddenSamples = {} }
 	for _, o in ipairs(pg:GetDescendants()) do
-		if o:IsA("TextLabel") or o:IsA("TextButton") then
+		if (o:IsA("TextLabel") or o:IsA("TextButton")) and not (selfGui and o:IsDescendantOf(selfGui)) then
 			local ok, clean = pcall(norm, o.Text)
 			if ok and clean ~= "" then
 				stat.texts += 1
-				local n = utf8.len(clean)
 				local isVis = visible(o)
+				local n = utf8.len(clean)
 				if isVis then
+					if stat.texts < 400 and n and n <= 40 then texts[clean] = true end
 					if clean == "ввод" then enter = tapTarget(o)
 					elseif clean == "стереть всё" or clean == "стереть все" then eraseAll = tapTarget(o)
-					elseif clean == "стереть" then erase = tapTarget(o) end
+					elseif clean == "стереть" then erase = tapTarget(o)
+					elseif isWordLike(clean) then words[#words + 1] = clean end
 				end
 				if n and n <= 3 then
 					local letter, cnt = nil, 0
 					for _, cp in utf8.codes(clean) do if isCyr(cp) then cnt += 1 letter = utf8.char(cp) end end
 					if cnt == 1 then
 						stat.single += 1
-						if isVis then singles[#singles + 1] = { obj = o, letter = letter }
+						if isVis then singles[#singles + 1] = { obj = o, letter = letter, isKey = false }
 						else
 							stat.hidden += 1
 							if #stat.hiddenSamples < 5 then stat.hiddenSamples[#stat.hiddenSamples + 1] = letter .. " @ " .. pathOf(o) end
@@ -188,85 +208,120 @@ local function scan()
 		end
 	end
 
-	-- контейнер клавиатуры: самый глубокий предок, под которым ≥20 одиночных букв
-	local counts, depth = {}, {}
-	for _, s in ipairs(singles) do
-		local cur, d = s.obj.Parent, 0
-		local chain = {}
-		while cur and cur ~= pg do chain[#chain + 1] = cur cur = cur.Parent end
-		for i, anc in ipairs(chain) do
-			counts[anc] = (counts[anc] or 0) + 1
-			depth[anc] = #chain - i
+	-- клавиатура = самая большая группа букв одного размера (≥20 штук)
+	local bestN, bestSz = 0, nil
+	for _, a in ipairs(singles) do
+		local c, sa = 0, a.obj.AbsoluteSize
+		for _, b in ipairs(singles) do
+			local sb = b.obj.AbsoluteSize
+			if math.abs(sa.X - sb.X) <= 5 and math.abs(sa.Y - sb.Y) <= 5 then c += 1 end
 		end
+		if c > bestN then bestN, bestSz = c, sa end
 	end
-	local container, bestDepth = nil, -1
-	for anc, c in pairs(counts) do
-		if c >= 20 and depth[anc] > bestDepth then container, bestDepth = anc, depth[anc] end
+	local keys, nKeys, keyParent = {}, 0, nil
+	if bestN >= 20 then
+		for _, s in ipairs(singles) do
+			local sz = s.obj.AbsoluteSize
+			if math.abs(sz.X - bestSz.X) <= 5 and math.abs(sz.Y - bestSz.Y) <= 5 then
+				s.isKey = true
+				if not keys[s.letter] then keys[s.letter] = tapTarget(s.obj) nKeys += 1 keyParent = keyParent or s.obj.Parent end
+			end
+		end
 	end
 
-	local keys, nKeys, target, best = {}, 0, nil, -1
+	-- поле со словом: остальные одиночные буквы, собранные в одну строку (по Y), слева направо
+	local groups = {}
 	for _, s in ipairs(singles) do
-		local inside = (container == nil) or s.obj:IsDescendantOf(container)
-		if inside then
-			local cur = keys[s.letter]
-			if not cur or s.obj.AbsoluteSize.Magnitude > cur.AbsoluteSize.Magnitude then
-				if not cur then nKeys += 1 end
-				keys[s.letter] = s.obj
-			end
-		else
-			local size = s.obj:IsA("TextLabel") and s.obj.TextSize or s.obj.AbsoluteSize.Y
-			if size > best then best, target = size, s.letter end
+		if not s.isKey then
+			local y = s.obj.AbsolutePosition.Y
+			local g
+			for _, gg in ipairs(groups) do if math.abs(gg.y - y) < 25 then g = gg break end end
+			if not g then g = { y = y, items = {} } groups[#groups + 1] = g end
+			g.items[#g.items + 1] = s
 		end
 	end
-	for l, o in pairs(keys) do keys[l] = tapTarget(o) end
-	return { keys = keys, nKeys = nKeys, enter = enter, erase = erase, eraseAll = eraseAll, letter = target, stat = stat, container = container }
+	local bestG
+	for _, g in ipairs(groups) do
+		if not bestG or #g.items > #bestG.items then bestG = g end
+	end
+	local row = ""
+	if bestG then
+		table.sort(bestG.items, function(a, b) return a.obj.AbsolutePosition.X < b.obj.AbsolutePosition.X end)
+		local t, lastX, lastL = {}, -1e9, nil
+		for _, s in ipairs(bestG.items) do
+			local x = s.obj.AbsolutePosition.X
+			if not (lastL == s.letter and math.abs(x - lastX) < 4) then t[#t + 1] = s.letter end -- дубль-обводка на том же месте
+			lastX, lastL = x, s.letter
+		end
+		row = table.concat(t)
+	end
+	return { keys = keys, nKeys = nKeys, enter = enter, erase = erase, eraseAll = eraseAll, row = row, words = words, texts = texts, stat = stat, keyParent = keyParent }
 end
 
----------------------------------------------------------------- Нажатие на кнопку (тап по экрану, запасной вариант — сигналы)
+---------------------------------------------------------------- Нажатие на кнопку (сам подбирает рабочий способ)
 local VIM = nil
 pcall(function() VIM = game:GetService("VirtualInputManager") end)
 
-local function tap(btn)
+local METHODS = { "vim_auto", "signal", "vim_raw", "vim_inset", "touch" }
+local method, methodOk = 1, false
+
+local function center(btn, mode)
+	local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
+	local inset = Vector2.zero
+	if mode == "inset" then
+		inset = GuiService:GetGuiInset()
+	elseif mode == "auto" then
+		local sg = btn:FindFirstAncestorOfClass("ScreenGui")
+		if not (sg and sg.IgnoreGuiInset) then inset = GuiService:GetGuiInset() end
+	end
+	return pos.X + size.X / 2 + inset.X, pos.Y + size.Y / 2 + inset.Y
+end
+
+local function tapWith(btn, m)
 	if not btn or not btn.Parent then return false end
-	local done = false
-	if VIM then
-		pcall(function()
-			local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
-			local sg = btn:FindFirstAncestorOfClass("ScreenGui")
-			local inset = (sg and sg.IgnoreGuiInset) and Vector2.zero or GuiService:GetGuiInset()
-			local x, y = pos.X + size.X / 2 + inset.X, pos.Y + size.Y / 2 + inset.Y
+	local name = METHODS[m]
+	local ok = pcall(function()
+		if name == "signal" then
+			assert(btn:IsA("GuiButton"), "not a button")
+			local fired = false
+			for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
+				if getconnections then
+					for _, c in ipairs(getconnections(btn[sig])) do pcall(function() c:Fire() end) fired = true end
+				elseif firesignal then
+					firesignal(btn[sig]) fired = true
+				end
+			end
+			assert(fired, "no connections")
+		elseif name == "touch" then
+			local x, y = center(btn, "auto")
+			VIM:SendTouchEvent(1, 0, x, y)
+			task.wait(0.03)
+			VIM:SendTouchEvent(1, 2, x, y)
+		else
+			local mode = name == "vim_auto" and "auto" or (name == "vim_inset" and "inset" or "raw")
+			local x, y = center(btn, mode)
 			VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
 			task.wait(0.03)
 			VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-			done = true
-		end)
-	end
-	if not done then
-		pcall(function()
-			for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
-				if getconnections then
-					for _, c in ipairs(getconnections(btn[sig])) do pcall(function() c:Fire() end) end
-				elseif firesignal then
-					firesignal(btn[sig])
-				end
-			end
-			done = true
-		end)
-	end
-	return done
+		end
+	end)
+	return ok
 end
 
 ---------------------------------------------------------------- Логика Auto-Win
 local used, bad = {}, {}
+local seenCount = 0
 local HARD = { ["щ"] = true, ["ц"] = true, ["ф"] = true, ["э"] = true, ["ю"] = true, ["ё"] = true, ["ж"] = true, ["х"] = true }
 local status = function() end
+local onScan = function() end
 local alive = true
+local busy = false
 
 local function pickWord(letter)
 	local list = byLetter[letter]
 	if not list then return nil end
 	local fallbackW
-	for _ = 1, 400 do
+	for _ = 1, 600 do
 		local w = list[math.random(1, #list)]
 		if not used[w] and not bad[w] then
 			fallbackW = fallbackW or w
@@ -275,52 +330,190 @@ local function pickWord(letter)
 			if HARD[chs[#chs]] then return w end
 		end
 	end
-	return fallbackW
+	if fallbackW then return fallbackW end
+	-- случайные не сработали (почти всё занято): перебираем по порядку
+	for _, w in ipairs(list) do if not used[w] and not bad[w] then return w end end
+	return nil
 end
 
-local function typeWord(w, s)
-	if s.eraseAll then tap(s.eraseAll) task.wait(Settings.Delay / 1000) end
-	for _, ch in ipairs(chars(w)) do
-		if not alive then return false end
-		local key = s.keys[ch]
-		if not key then return false end
-		tap(key)
-		task.wait(Settings.Delay / 1000)
+local function lcp(a, b)
+	local i = 0
+	while i < #a and i < #b and a[i + 1] == b[i + 1] do i += 1 end
+	return i
+end
+
+local function waitRowChange(prevRow, timeout)
+	local t0 = tick()
+	while tick() - t0 < timeout do
+		task.wait(0.07)
+		local ok, s = pcall(scan)
+		if ok and s.row ~= prevRow then return s end
 	end
-	task.wait(Settings.Delay / 1000)
-	tap(s.enter)
-	return true
+	return nil
 end
 
-local lastLetter, lastTime, lastWord = nil, 0, nil
-local busy = false
+-- набирает слово, глядя на поле: сверяет каждую букву, лишнее стирает, неверный способ нажатия меняет
+local function typeWord(w, s0)
+	local target = chars(w)
+	local s = s0
+	local fails, rotations, guard = 0, 0, 0
+	while alive do
+		guard += 1
+		if guard > 70 then return false, "слишком много шагов" end
+		if s.nKeys < 20 then return false, "клавиатура пропала" end
+		local rc = chars(s.row)
+		local p = lcp(rc, target)
+		if #rc == #target and p == #target then return true, s end
+		local btn, ch
+		if #rc > p then
+			if (#rc - p) >= 3 and s.eraseAll then btn = s.eraseAll else btn = s.erase or s.eraseAll end
+			if not btn then return false, "нет кнопки «Стереть»" end
+		else
+			ch = target[p + 1]
+			btn = s.keys[ch]
+			if not btn then return false, "нет клавиши «" .. ch .. "»" end
+		end
+		tapWith(btn, method)
+		local ns = waitRowChange(s.row, 0.7)
+		local good = false
+		if ns then
+			local nrc = chars(ns.row)
+			if ch then good = (lcp(nrc, target) > p and #nrc == #rc + 1) else good = (#nrc < #rc) end
+			s = ns
+		end
+		if good then
+			if not methodOk then log("способ нажатия: " .. METHODS[method]) end
+			methodOk, fails = true, 0
+			task.wait(Settings.Delay / 1000)
+		else
+			fails += 1
+			if not methodOk then
+				method = method % #METHODS + 1
+				rotations += 1
+				if rotations >= #METHODS * 2 then return false, "нажатия не срабатывают" end
+			elseif fails >= 3 then
+				return false, "нет реакции (не мой ход?)"
+			end
+		end
+	end
+	return false, "остановлено"
+end
+
+local ERR = { "нет такого", "не найден", "не существует", "уже был", "уже назван", "уже использ", "повтор", "ошибк", "неверн", "не принят", "не подход" }
+local function isErrText(t)
+	for _, p in ipairs(ERR) do if t:find(p, 1, true) then return true end end
+	return false
+end
+
+-- один ход: слово → Ввод → если не засчитали, другое слово на ту же букву
+local function playTurn(L, s)
+	for attempt = 1, 6 do
+		if not alive or not Settings.AutoWin then return "stopped" end
+		local w = pickWord(L)
+		if not w then
+			status("Нет подходящих слов на «" .. L .. "»", C.red)
+			log("нет слов на «" .. L .. "»")
+			return "nowords"
+		end
+		used[w] = true
+		status("Пишу: " .. w)
+		log("пишу: " .. w)
+		local ok, res = typeWord(w, s)
+		if not ok then
+			log("не набрал «" .. w .. "»: " .. tostring(res))
+			status("Не смог набрать: " .. tostring(res), C.red)
+			return "typefail"
+		end
+		s = res
+		local before = s.texts
+		tapWith(s.enter, method)
+		local t0, rejected, changed, last = tick(), false, false, nil
+		while tick() - t0 < 2.6 do
+			task.wait(0.15)
+			local sk, ns = pcall(scan)
+			if sk then
+				last = ns
+				for t in pairs(ns.texts) do
+					if not before[t] and not isErrText(t) and #t < 60 then log("новый текст: " .. t) end
+					if not before[t] and isErrText(t) then rejected = true log("ошибка: " .. t) end
+				end
+				if rejected then break end
+				if ns.row ~= w then changed = true break end
+			end
+		end
+		if changed and not rejected then
+			log("засчитано: " .. w)
+			status("Засчитано: " .. w .. ". Жду противника…", C.green)
+			return "ok"
+		end
+		bad[w] = true
+		log("не засчитано: " .. w)
+		status("Не засчитано: " .. w .. " — пробую другое", C.gold)
+		s = last or scan()
+		if s.nKeys < 20 then return "typefail" end
+	end
+	return "failed"
+end
+
+-- слова противника/свои с экрана и из мира (над головами) попадают в «использованные»
+local function rememberWords(list)
+	for _, w in ipairs(list) do
+		if not used[w] then used[w] = true seenCount += 1 end
+	end
+end
+
+task.spawn(function()
+	local turn = { waitChange = false, lastL = nil, lastDone = 0 }
+	while alive do
+		task.wait(0.4)
+		local ok, err = pcall(function()
+			local s = scan()
+			if Settings.WatchWorld then rememberWords(s.words) end
+			local kb = s.nKeys >= 20 and s.enter ~= nil
+			onScan(s, kb)
+			if not Settings.AutoWin or busy then return end
+			if not kb then
+				status("Жду клавиатуру — сядь за стол к игроку")
+				turn.waitChange = false
+				return
+			end
+			local rowN = utf8.len(s.row) or 0
+			if rowN ~= 1 then
+				turn.waitChange = false
+				status("Жду свой ход…")
+				return
+			end
+			local L = s.row
+			if turn.waitChange and L == turn.lastL and tick() - turn.lastDone < 8 then return end
+			busy = true
+			status("Моя буква «" .. L .. "» — отвечаю…")
+			log("мой ход, буква «" .. L .. "»")
+			task.wait(Settings.ThinkTime / 1000)
+			local res = playTurn(L, scan())
+			turn.lastL, turn.lastDone, turn.waitChange = L, tick(), (res ~= "stopped")
+			busy = false
+		end)
+		if not ok then busy = false status("Ошибка: " .. tostring(err):sub(1, 60), C.red) log("ошибка: " .. tostring(err):sub(1, 80)) end
+	end
+end)
+
+-- слова в мире (BillboardGui/SurfaceGui над игроками), раз в пару секунд, без подвисаний
 task.spawn(function()
 	while alive do
-		task.wait(0.25)
-		if Settings.AutoWin and not busy then
-			local ok, err = pcall(function()
-				local s = scan()
-				if s.nKeys < 20 or not s.enter then status("Жду клавиатуру…") return end
-				local L = s.letter
-				if not L then status("Не вижу нужную букву (кнопка Scan)") return end
-				local now = tick()
-				if L == lastLetter and now - lastTime < 4 then return end
-				-- та же буква и 4 сек прошло: прошлое слово не приняли
-				if L == lastLetter and lastWord then bad[lastWord] = true used[lastWord] = nil end
-				busy = true
-				status("Буква «" .. L .. "» — думаю…")
-				task.wait(Settings.ThinkTime / 1000)
-				s = scan()
-				local w = pickWord(L)
-				if not w then status("Нет слов на «" .. L .. "»", C.red) busy = false lastLetter, lastTime = L, tick() return end
-				status("Отвечаю: " .. w)
-				used[w] = true
-				lastLetter, lastTime, lastWord = L, tick(), w
-				if not typeWord(w, s) then status("Не нашёл клавишу для «" .. w .. "»", C.red) bad[w] = true end
-				lastTime = tick()
-				busy = false
+		task.wait(2.5)
+		if Settings.WatchWorld then
+			pcall(function()
+				local found, i = {}, 0
+				for _, o in ipairs(workspace:GetDescendants()) do
+					i += 1
+					if i % 2500 == 0 then task.wait() end
+					if o:IsA("TextLabel") and o.Visible then
+						local ok, clean = pcall(norm, o.Text)
+						if ok and isWordLike(clean) and (o:FindFirstAncestorWhichIsA("BillboardGui") or o:FindFirstAncestorWhichIsA("SurfaceGui")) then found[#found + 1] = clean end
+					end
+				end
+				rememberWords(found)
 			end)
-			if not ok then busy = false status("Ошибка: " .. tostring(err):sub(1, 40), C.red) end
 		end
 	end
 end)
@@ -352,6 +545,7 @@ do
 	end
 end
 
+selfGui = gui
 local root = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(WIN_W, WIN_H), BackgroundTransparency = 1 }, gui)
 local uiScale = new("UIScale", {}, root)
 local function updateScale()
@@ -539,28 +733,41 @@ newToggle(mainPage, "Auto-Win", "Сам пишет слово на нужную 
 newSlider(mainPage, "Скорость нажатий (пауза)", "Delay", 20, 600, " мс")
 newSlider(mainPage, "Пауза перед ответом", "ThinkTime", 0, 4000, " мс")
 newToggle(mainPage, "Трудные окончания", "Слова на щ, ц, ф, э, ю, ё, ж, х", "HardEnds")
-section(mainPage, "СТАТУС")
+newToggle(mainPage, "Следить за словами", "Свои и чужие слова не повторяются", "WatchWorld")
+section(mainPage, "СОСТОЯНИЕ")
+local kbCard = card(mainPage, 50)
+local kbLabel = label(kbCard, "Клавиатура: ищу…", 12, C.mut, false)
+kbLabel.Position, kbLabel.Size = UDim2.fromOffset(14, 4), UDim2.new(1, -28, 1, -8)
+kbLabel.TextWrapped = true
 local stCard = card(mainPage, 50)
 local stLabel = label(stCard, "Словарь: загрузка…", 12, C.mut, false)
 stLabel.Position, stLabel.Size = UDim2.fromOffset(14, 4), UDim2.new(1, -28, 1, -8)
 stLabel.TextWrapped = true
-stLabel.TextYAlignment = Enum.TextYAlignment.Center
 status = function(text, color)
 	stLabel.Text = text
 	stLabel.TextColor3 = color or C.mut
+end
+onScan = function(s, kb)
+	if kb then
+		kbLabel.Text = string.format("Клавиатура найдена: %d клавиш · в поле: «%s»\nСлов в памяти: %d (чужих/своих с экрана: %d)", s.nKeys, s.row, (function() local n = 0 for _ in pairs(used) do n += 1 end return n end)(), seenCount)
+		kbLabel.TextColor3 = C.green
+	else
+		kbLabel.Text = "Клавиатура не найдена — сядь за стол к игроку, скрипт заметит её сам"
+		kbLabel.TextColor3 = C.mut
+	end
 end
 
 section(debugPage, "ПРОВЕРКА ИГРЫ")
 local scanCard = card(debugPage, 54)
 local sT = label(scanCard, "Scan", 14, C.txt, true)
 sT.Position, sT.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -110, 0, 18)
-local sS = label(scanCard, "Ищет клавиши, «Ввод», «Стереть», букву", 12, C.mut, false)
+local sS = label(scanCard, "Клавиши, «Ввод», «Стереть», поле слова", 12, C.mut, false)
 sS.Position, sS.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -110, 0, 16)
 local scanBtn = new("TextButton", { Text = "Scan", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.acc, AutoButtonColor = false,
 	Size = UDim2.fromOffset(70, 30), Position = UDim2.new(1, -84, 0.5, -15) }, scanCard)
 corner(scanBtn, 9)
-local outCard = card(debugPage, 190)
-local outLabel = label(outCard, "Открой клавиатуру в игре (когда твой ход) и нажми Scan. Результат копируется в буфер.", 11, C.mut, false)
+local outCard = card(debugPage, 150)
+local outLabel = label(outCard, "Сядь за стол и нажми Scan. Результат копируется в буфер.", 11, C.mut, false)
 outLabel.Position, outLabel.Size = UDim2.fromOffset(12, 8), UDim2.new(1, -24, 1, -16)
 outLabel.TextWrapped, outLabel.TextYAlignment = true, Enum.TextYAlignment.Top
 
@@ -573,24 +780,46 @@ scanBtn.MouseButton1Click:Connect(function()
 	local lines = {
 		string.format("Клавиш найдено: %d", s.nKeys),
 		"Ввод: " .. tostring(s.enter ~= nil) .. "  Стереть: " .. tostring(s.erase ~= nil) .. "  Стереть всё: " .. tostring(s.eraseAll ~= nil),
-		"Нужная буква: " .. tostring(s.letter),
+		"Поле со словом: «" .. s.row .. "»",
 		"Буквы: " .. table.concat(letters, " "),
-		string.format("Текстов на экране: %d, одиночных букв: %d (скрыто: %d)", s.stat.texts, s.stat.single, s.stat.hidden),
-		"Контейнер клавиатуры: " .. (s.container and pathOf(s.container) or "не определён"),
+		string.format("Текстов: %d, одиночных букв: %d (скрыто: %d)", s.stat.texts, s.stat.single, s.stat.hidden),
+		"Клавиатура: " .. (s.keyParent and pathOf(s.keyParent) or "не найдена"),
+		"Способ нажатия: " .. METHODS[method] .. (methodOk and " (работает)" or " (не проверен)"),
 	}
 	if s.stat.hidden > 0 then
-		lines[#lines + 1] = "Скрытые буквы (клавиатура могла быть закрыта):"
+		lines[#lines + 1] = "Скрытые буквы:"
 		for _, h in ipairs(s.stat.hiddenSamples) do lines[#lines + 1] = "  " .. h end
 	end
 	local text = table.concat(lines, "\n")
 	outLabel.Text = text
 	outLabel.TextColor3 = s.nKeys >= 20 and C.txt or C.gold
-	pcall(function() if setclipboard then setclipboard(text) end end)
+	pcall(function() if setclipboard then setclipboard(text .. "\n\n" .. table.concat(logLines, "\n")) end end)
 end)
+
+local resetCard = card(debugPage, 54)
+local rT = label(resetCard, "Память слов", 14, C.txt, true)
+rT.Position, rT.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -110, 0, 18)
+local rS = label(resetCard, "Забыть названные слова (новая игра)", 12, C.mut, false)
+rS.Position, rS.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -110, 0, 16)
+local resetBtn = new("TextButton", { Text = "Сброс", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.red, AutoButtonColor = false,
+	Size = UDim2.fromOffset(70, 30), Position = UDim2.new(1, -84, 0.5, -15) }, resetCard)
+corner(resetBtn, 9)
+resetBtn.MouseButton1Click:Connect(function()
+	used, bad, seenCount = {}, {}, 0
+	log("память слов сброшена")
+end)
+
+section(debugPage, "ЖУРНАЛ")
+local logCard = card(debugPage, 210)
+local logLabel = label(logCard, "", 11, C.mut, false)
+logLabel.Position, logLabel.Size = UDim2.fromOffset(12, 8), UDim2.new(1, -24, 1, -16)
+logLabel.TextWrapped, logLabel.TextYAlignment = true, Enum.TextYAlignment.Top
+onLog = function() logLabel.Text = table.concat(logLines, "\n") end
 
 task.spawn(function()
 	loadWords()
 	status("Слов в словаре: " .. wordCount .. (wordCount < 500 and " (мини-список: нет words/ru_words.txt)" or ""))
+	log("словарь: " .. wordCount .. " слов")
 end)
 
 selectTab("Auto-Win")
