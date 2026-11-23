@@ -18,8 +18,8 @@ local WORDS_FILE = "words/ru_words.txt" -- словарь: одно слово �
 
 local Settings = {
 	AutoWin = false,
-	Delay = 0.15,      -- пауза между нажатиями клавиш (сек)
-	ThinkTime = 0.8,   -- пауза перед началом ответа (сек)
+	Delay = 150,       -- пауза между нажатиями клавиш (мс)
+	ThinkTime = 800,   -- пауза перед началом ответа (мс)
 	HardEnds = true,   -- выбирать слова, заканчивающиеся на «трудные» буквы
 }
 
@@ -135,47 +135,91 @@ local function visible(o)
 	return o.AbsoluteSize.X > 2 and o.AbsoluteSize.Y > 2
 end
 
-local function textOf(o)
-	if o:IsA("TextButton") or o:IsA("TextLabel") then return o.Text end
-	return nil
+-- текст без тегов, лишних пробелов, в нижнем регистре
+local function norm(t)
+	t = tostring(t or ""):gsub("<[^>]->", ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+	return lowerRu(t)
 end
 
-local function trimText(t) return (lowerRu((t or ""):gsub("<[^>]->", ""):gsub("^%s+", ""):gsub("%s+$", ""))) end
+-- по чему тапать: ближайшая кнопка (или сам объект — тап идёт по координатам)
+local function tapTarget(o)
+	local cur = o
+	while cur and cur ~= pg do
+		if cur:IsA("GuiButton") then return cur end
+		cur = cur.Parent
+	end
+	return o
+end
 
--- клавиатура: все кнопки с одной русской буквой + служебные («Ввод», «Стереть», «Стереть всё»)
+local function pathOf(o)
+	local p = o:GetFullName()
+	return (p:gsub("^.-PlayerGui%.", ""))
+end
+
+-- клавиатура: одиночные русские буквы, собранные в один контейнер (≥20 штук); нужная буква — одиночная буква ВНЕ клавиатуры
 local function scan()
-	local keys, enter, erase, eraseAll, keyParent = {}, nil, nil, nil, nil
-	local others = {}
+	local singles, enter, erase, eraseAll = {}, nil, nil, nil
+	local stat = { texts = 0, single = 0, hidden = 0, hiddenSamples = {} }
 	for _, o in ipairs(pg:GetDescendants()) do
-		local t = textOf(o)
-		if t and t ~= "" and visible(o) then
-			local clean = trimText(t)
-			local btn = o:IsA("TextButton") and o or (o.Parent and o.Parent:IsA("GuiButton") and o.Parent) or nil
-			if btn then
-				if utf8.len(clean) == 1 and isCyr(utf8.codepoint(clean, 1)) then
-					if not keys[clean] then keys[clean] = btn end
-				elseif clean == "ввод" then enter = btn
-				elseif clean == "стереть всё" or clean == "стереть все" then eraseAll = btn
-				elseif clean == "стереть" then erase = btn end
+		if o:IsA("TextLabel") or o:IsA("TextButton") then
+			local ok, clean = pcall(norm, o.Text)
+			if ok and clean ~= "" then
+				stat.texts += 1
+				local n = utf8.len(clean)
+				local isVis = visible(o)
+				if isVis then
+					if clean == "ввод" then enter = tapTarget(o)
+					elseif clean == "стереть всё" or clean == "стереть все" then eraseAll = tapTarget(o)
+					elseif clean == "стереть" then erase = tapTarget(o) end
+				end
+				if n and n <= 3 then
+					local letter, cnt = nil, 0
+					for _, cp in utf8.codes(clean) do if isCyr(cp) then cnt += 1 letter = utf8.char(cp) end end
+					if cnt == 1 then
+						stat.single += 1
+						if isVis then singles[#singles + 1] = { obj = o, letter = letter }
+						else
+							stat.hidden += 1
+							if #stat.hiddenSamples < 5 then stat.hiddenSamples[#stat.hiddenSamples + 1] = letter .. " @ " .. pathOf(o) end
+						end
+					end
+				end
 			end
-			if utf8.len(clean) == 1 and isCyr(utf8.codepoint(clean, 1)) then others[#others + 1] = { obj = o, letter = clean } end
 		end
 	end
-	local nKeys = 0
-	for _, b in pairs(keys) do nKeys += 1 keyParent = keyParent or b.Parent end
-	-- нужная буква: одиночная русская буква ВНЕ клавиатуры (большой квадрат над персонажем)
-	local target, best = nil, -1
-	for _, c in ipairs(others) do
-		local inKeyboard = false
-		for _, b in pairs(keys) do
-			if c.obj == b or c.obj:IsDescendantOf(b) then inKeyboard = true break end
-		end
-		if not inKeyboard then
-			local size = c.obj:IsA("TextLabel") and c.obj.TextSize or c.obj.AbsoluteSize.Y
-			if size > best then best, target = size, c.letter end
+
+	-- контейнер клавиатуры: самый глубокий предок, под которым ≥20 одиночных букв
+	local counts, depth = {}, {}
+	for _, s in ipairs(singles) do
+		local cur, d = s.obj.Parent, 0
+		local chain = {}
+		while cur and cur ~= pg do chain[#chain + 1] = cur cur = cur.Parent end
+		for i, anc in ipairs(chain) do
+			counts[anc] = (counts[anc] or 0) + 1
+			depth[anc] = #chain - i
 		end
 	end
-	return { keys = keys, nKeys = nKeys, enter = enter, erase = erase, eraseAll = eraseAll, letter = target }
+	local container, bestDepth = nil, -1
+	for anc, c in pairs(counts) do
+		if c >= 20 and depth[anc] > bestDepth then container, bestDepth = anc, depth[anc] end
+	end
+
+	local keys, nKeys, target, best = {}, 0, nil, -1
+	for _, s in ipairs(singles) do
+		local inside = (container == nil) or s.obj:IsDescendantOf(container)
+		if inside then
+			local cur = keys[s.letter]
+			if not cur or s.obj.AbsoluteSize.Magnitude > cur.AbsoluteSize.Magnitude then
+				if not cur then nKeys += 1 end
+				keys[s.letter] = s.obj
+			end
+		else
+			local size = s.obj:IsA("TextLabel") and s.obj.TextSize or s.obj.AbsoluteSize.Y
+			if size > best then best, target = size, s.letter end
+		end
+	end
+	for l, o in pairs(keys) do keys[l] = tapTarget(o) end
+	return { keys = keys, nKeys = nKeys, enter = enter, erase = erase, eraseAll = eraseAll, letter = target, stat = stat, container = container }
 end
 
 ---------------------------------------------------------------- Нажатие на кнопку (тап по экрану, запасной вариант — сигналы)
@@ -235,15 +279,15 @@ local function pickWord(letter)
 end
 
 local function typeWord(w, s)
-	if s.eraseAll then tap(s.eraseAll) task.wait(Settings.Delay) end
+	if s.eraseAll then tap(s.eraseAll) task.wait(Settings.Delay / 1000) end
 	for _, ch in ipairs(chars(w)) do
 		if not alive then return false end
 		local key = s.keys[ch]
 		if not key then return false end
 		tap(key)
-		task.wait(Settings.Delay)
+		task.wait(Settings.Delay / 1000)
 	end
-	task.wait(Settings.Delay)
+	task.wait(Settings.Delay / 1000)
 	tap(s.enter)
 	return true
 end
@@ -265,7 +309,7 @@ task.spawn(function()
 				if L == lastLetter and lastWord then bad[lastWord] = true used[lastWord] = nil end
 				busy = true
 				status("Буква «" .. L .. "» — думаю…")
-				task.wait(Settings.ThinkTime)
+				task.wait(Settings.ThinkTime / 1000)
 				s = scan()
 				local w = pickWord(L)
 				if not w then status("Нет слов на «" .. L .. "»", C.red) busy = false lastLetter, lastTime = L, tick() return end
@@ -281,8 +325,14 @@ task.spawn(function()
 	end
 end)
 
----------------------------------------------------------------- GUI
+---------------------------------------------------------------- GUI (как у остальных меню REZ)
+local WIN_W, WIN_H, HEADER_H = 540, 370, 50
 local GUI_NAME = "WordGameREZ"
+local function isPress(i) return i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch end
+local order = 0
+local function nextOrder() order += 1 return order end
+local function gradient(obj, c1, c2, rot) return new("UIGradient", { Color = ColorSequence.new(c1, c2), Rotation = rot or 0 }, obj) end
+
 local function containers()
 	local list = {}
 	pcall(function() if gethui then list[#list + 1] = gethui() end end)
@@ -292,7 +342,7 @@ local function containers()
 end
 for _, c in ipairs(containers()) do pcall(function() local o = c:FindFirstChild(GUI_NAME) if o then o:Destroy() end end) end
 
-local gui = new("ScreenGui", { Name = GUI_NAME, ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 998 }, nil)
+local gui = new("ScreenGui", { Name = GUI_NAME, ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999 }, nil)
 pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
 do
 	local ok = pcall(function() if gethui then gui.Parent = gethui() else error("x") end end)
@@ -302,28 +352,31 @@ do
 	end
 end
 
-local W, H = 300, 300
-local root = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.35), Size = UDim2.fromOffset(W, H), BackgroundTransparency = 1 }, gui)
+local root = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(WIN_W, WIN_H), BackgroundTransparency = 1 }, gui)
 local uiScale = new("UIScale", {}, root)
 local function updateScale()
 	local vp = camera.ViewportSize
-	uiScale.Scale = math.clamp(math.min(vp.X * 0.9 / W, vp.Y * 0.8 / H), 0.5, 1.1)
+	uiScale.Scale = math.clamp(math.min(vp.X * 0.94 / WIN_W, vp.Y * 0.9 / WIN_H), 0.45, 1.15)
 end
 updateScale()
 track(camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateScale))
 
-local win = new("CanvasGroup", { Size = UDim2.fromOffset(W, H), BackgroundColor3 = C.bg, BorderSizePixel = 0 }, root)
+local win = new("CanvasGroup", { Size = UDim2.fromOffset(WIN_W, WIN_H), BackgroundColor3 = C.bg, BorderSizePixel = 0, GroupTransparency = 1 }, root)
 corner(win, 16)
-stroke(win, C.acc, 1.5, 0.35)
+local winBg = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, win)
+gradient(winBg, C.bg2, C.bg, 55)
+local winStroke = stroke(win, C.acc, 1.5, 0.35)
+gradient(winStroke, C.acc2, C.acc, 90)
+TweenService:Create(win, TweenInfo.new(0.4), { GroupTransparency = 0 }):Play()
 
-local header = new("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundTransparency = 1 }, win)
-local logo = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 8), BackgroundTransparency = 1, Image = "" }, header)
-corner(logo, 8)
-applyAsset(logo, "gameimages/logo.png")
+-- Заголовок
+local header = new("Frame", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1 }, win)
 local title = label(header, '<font color="#c084fc">WordGame</font>REZ', 18, C.txt, true)
-title.Position, title.Size = UDim2.fromOffset(54, 6), UDim2.new(1, -110, 0, 24)
-local sub = label(header, "Word Game [RU]", 11, C.mut, false)
-sub.Position, sub.Size = UDim2.fromOffset(54, 30), UDim2.new(1, -110, 0, 14)
+title.Position, title.Size = UDim2.fromOffset(54, 6), UDim2.new(0.6, 0, 0, 24)
+local logo = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(12, 8), BackgroundTransparency = 1, Image = "", ScaleType = Enum.ScaleType.Fit }, header)
+applyAsset(logo, "gameimages/logo.png")
+local sub = label(header, "Word Game [RU]  ·  mobile + PC", 11, C.mut, false)
+sub.Position, sub.Size = UDim2.fromOffset(54, 28), UDim2.new(0.6, 0, 0, 16)
 new("Frame", { Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = C.line, BorderSizePixel = 0 }, header)
 
 local function headerBtn(text, index, hover)
@@ -336,112 +389,250 @@ local function headerBtn(text, index, hover)
 end
 local closeBtn = headerBtn("×", 0, C.red)
 local bubbleBtn = headerBtn("–", 1, C.acc)
+local rollBtn = headerBtn("^", 2, C.acc)
 makeDraggable(header, root)
 
-local body = new("Frame", { Position = UDim2.fromOffset(0, 50), Size = UDim2.new(1, 0, 1, -50), BackgroundTransparency = 1 }, win)
-new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, body)
-new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, body)
+-- Тело
+local body = new("Frame", { Position = UDim2.fromOffset(0, HEADER_H), Size = UDim2.new(1, 0, 1, -HEADER_H), BackgroundTransparency = 1 }, win)
+local side = new("Frame", { Size = UDim2.new(0, 132, 1, 0), BackgroundTransparency = 1 }, body)
+new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
+new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, side)
+new("Frame", { Position = UDim2.new(0, 132, 0, 8), Size = UDim2.new(0, 1, 1, -16), BackgroundColor3 = C.line, BorderSizePixel = 0 }, body)
+local content = new("Frame", { Position = UDim2.fromOffset(133, 0), Size = UDim2.new(1, -133, 1, 0), BackgroundTransparency = 1 }, body)
 
-local ord = 0
-local function row(h)
-	ord += 1
-	local f = new("Frame", { Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = ord }, body)
-	corner(f, 10) stroke(f, C.line, 1)
+-- профиль игрока внизу сайдбара
+do
+	local pc = new("Frame", { Position = UDim2.new(0, 10, 1, -58), Size = UDim2.fromOffset(112, 48), BackgroundColor3 = C.card, BorderSizePixel = 0 }, body)
+	corner(pc, 12) stroke(pc, C.line, 1)
+	local av = new("ImageLabel", { Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(7, 7), BackgroundColor3 = C.bg, BorderSizePixel = 0,
+		Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150" }, pc)
+	corner(av, 17)
+	local nm = label(pc, player.DisplayName, 12, C.txt, true)
+	nm.Position, nm.Size, nm.TextTruncate = UDim2.fromOffset(46, 8), UDim2.new(1, -50, 0, 16), Enum.TextTruncate.AtEnd
+	local un = label(pc, "@" .. player.Name, 10, C.mut, false)
+	un.Position, un.Size, un.TextTruncate = UDim2.fromOffset(46, 25), UDim2.new(1, -50, 0, 14), Enum.TextTruncate.AtEnd
+end
+
+-- Страницы / вкладки
+local pages, tabs = {}, {}
+local function newPage(name)
+	local p = new("ScrollingFrame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = C.acc,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), Visible = false, ScrollingDirection = Enum.ScrollingDirection.Y }, content)
+	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+	new("UIPadding", { PaddingTop = UDim.new(0, 12), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14) }, p)
+	pages[name] = p
+	return p
+end
+local function selectTab(name)
+	for n, p in pairs(pages) do p.Visible = (n == name) end
+	for n, t in pairs(tabs) do
+		local on = (n == name)
+		TweenService:Create(t.btn, TI, { BackgroundTransparency = on and 0.75 or 1, TextColor3 = on and C.txt or C.mut }):Play()
+		t.bar.Visible = on
+	end
+end
+local function newTab(name, text)
+	local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = C.acc, BackgroundTransparency = 1, Text = text, TextColor3 = C.mut, TextSize = 14,
+		Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, AutoButtonColor = false, LayoutOrder = nextOrder() }, side)
+	corner(b, 10)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 16) }, b)
+	local bar = new("Frame", { Size = UDim2.new(0, 3, 0.6, 0), Position = UDim2.new(0, -10, 0.2, 0), BackgroundColor3 = C.acc2, BorderSizePixel = 0, Visible = false }, b)
+	corner(bar, 2)
+	b.MouseButton1Click:Connect(function() selectTab(name) end)
+	tabs[name] = { btn = b, bar = bar }
+end
+
+-- Компоненты
+local function section(parent, text)
+	local l = label(parent, text, 11, C.mut, true)
+	l.Size, l.LayoutOrder = UDim2.new(1, 0, 0, 18), nextOrder()
+	return l
+end
+local function card(parent, h)
+	local f = new("Frame", { Size = UDim2.new(1, 0, 0, h), BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = nextOrder() }, parent)
+	corner(f, 12)
+	local st = stroke(f, C.line, 1)
+	f.MouseEnter:Connect(function() TweenService:Create(st, TI, { Color = C.acc }):Play() end)
+	f.MouseLeave:Connect(function() TweenService:Create(st, TI, { Color = C.line }):Play() end)
 	return f
 end
 
-local function toggle(text, key, onChange)
-	local f = row(38)
-	local l = label(f, text, 13, C.txt, true)
-	l.Position, l.Size = UDim2.fromOffset(12, 0), UDim2.new(1, -70, 1, 0)
-	local sw = new("TextButton", { Text = "", AutoButtonColor = false, Size = UDim2.fromOffset(40, 22), Position = UDim2.new(1, -52, 0.5, -11), BackgroundColor3 = Settings[key] and C.acc or C.off }, f)
-	corner(sw, 11)
-	local knob = new("Frame", { Size = UDim2.fromOffset(16, 16), Position = Settings[key] and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3), BackgroundColor3 = C.txt, BorderSizePixel = 0 }, sw)
-	corner(knob, 8)
-	sw.MouseButton1Click:Connect(function()
-		Settings[key] = not Settings[key]
-		local on = Settings[key]
-		TweenService:Create(sw, TI, { BackgroundColor3 = on and C.acc or C.off }):Play()
-		TweenService:Create(knob, TI, { Position = on and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3) }):Play()
-		if onChange then onChange(on) end
-	end)
+local function newToggle(parent, text, subtext, key)
+	local row = card(parent, 54)
+	local t = label(row, text, 14, C.txt, true)
+	t.Position, t.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -76, 0, 18)
+	local s = label(row, subtext, 12, C.mut, false)
+	s.Position, s.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -76, 0, 16)
+	local sw = new("TextButton", { Size = UDim2.fromOffset(46, 26), Position = UDim2.new(1, -60, 0.5, -13), Text = "", AutoButtonColor = false, BackgroundColor3 = C.off }, row)
+	corner(sw, 13)
+	local knob = new("Frame", { Size = UDim2.fromOffset(20, 20), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = Color3.fromRGB(154, 154, 181), BorderSizePixel = 0 }, sw)
+	corner(knob, 10)
+	local state = Settings[key]
+	local function render(anim)
+		local info = anim and TI or TweenInfo.new(0)
+		TweenService:Create(sw, info, { BackgroundColor3 = state and C.acc or C.off }):Play()
+		TweenService:Create(knob, info, { Position = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3),
+			BackgroundColor3 = state and Color3.new(1, 1, 1) or Color3.fromRGB(154, 154, 181) }):Play()
+	end
+	render(false)
+	sw.MouseButton1Click:Connect(function() state = not state Settings[key] = state render(true) end)
+	return row
 end
 
-local function slider(text, key, min, max, step, fmt)
-	local f = row(54)
-	local l = label(f, text, 13, C.txt, true)
-	l.Position, l.Size = UDim2.fromOffset(12, 6), UDim2.new(1, -80, 0, 18)
-	local v = label(f, "", 12, C.acc2, true)
-	v.Position, v.Size, v.TextXAlignment = UDim2.new(1, -72, 0, 6), UDim2.fromOffset(60, 18), Enum.TextXAlignment.Right
-	local bar = new("TextButton", { Text = "", AutoButtonColor = false, Position = UDim2.new(0, 12, 0, 34), Size = UDim2.new(1, -24, 0, 6), BackgroundColor3 = C.off }, f)
-	corner(bar, 3)
-	local fill = new("Frame", { Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.acc, BorderSizePixel = 0 }, bar)
+local function newSlider(parent, text, key, min, max, suffix)
+	local row = card(parent, 62)
+	local t = label(row, text, 14, C.txt, true)
+	t.Position, t.Size = UDim2.fromOffset(14, 8), UDim2.new(0.6, 0, 0, 18)
+	local v = label(row, "", 13, C.acc2, true)
+	v.TextXAlignment = Enum.TextXAlignment.Right
+	v.Position, v.Size = UDim2.new(0.5, 0, 0, 8), UDim2.new(0.5, -14, 0, 18)
+	local trackF = new("Frame", { Position = UDim2.new(0, 14, 0, 42), Size = UDim2.new(1, -28, 0, 6), BackgroundColor3 = C.off, BorderSizePixel = 0 }, row)
+	corner(trackF, 3)
+	local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.acc, BorderSizePixel = 0 }, trackF)
 	corner(fill, 3)
-	local function set(val)
-		val = math.clamp(math.floor(val / step + 0.5) * step, min, max)
-		Settings[key] = val
-		fill.Size = UDim2.fromScale((val - min) / (max - min), 1)
-		v.Text = string.format(fmt, val)
+	gradient(fill, C.acc, C.acc2)
+	local knob = new("Frame", { Size = UDim2.fromOffset(18, 18), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 2 }, trackF)
+	corner(knob, 9)
+	stroke(knob, C.acc, 2)
+	local hit = new("TextButton", { Position = UDim2.new(0, 0, 0, 28), Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Text = "", ZIndex = 3 }, row)
+	local function render()
+		local a = (Settings[key] - min) / (max - min)
+		fill.Size = UDim2.new(a, 0, 1, 0)
+		knob.Position = UDim2.new(a, 0, 0.5, 0)
+		v.Text = tostring(Settings[key]) .. suffix
 	end
-	set(Settings[key])
 	local dragging = false
-	local function fromX(x) set(min + (max - min) * math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)) end
-	bar.InputBegan:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = true fromX(i.Position.X) end
+	local sf = parent:FindFirstAncestorOfClass("ScrollingFrame") or parent
+	local function setX(x)
+		local a = math.clamp((x - trackF.AbsolutePosition.X) / trackF.AbsoluteSize.X, 0, 1)
+		Settings[key] = math.floor((min + (max - min) * a) / 10 + 0.5) * 10
+		render()
+	end
+	hit.InputBegan:Connect(function(i)
+		if isPress(i) then
+			dragging = true
+			if sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = false end
+			setX(i.Position.X)
+		end
 	end)
 	track(UserInputService.InputChanged:Connect(function(i)
-		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then fromX(i.Position.X) end
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then setX(i.Position.X) end
 	end))
 	track(UserInputService.InputEnded:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+		if dragging and isPress(i) then
+			dragging = false
+			if sf:IsA("ScrollingFrame") then sf.ScrollingEnabled = true end
+		end
 	end))
+	render()
+	return row
 end
 
-toggle("Auto-Win", "AutoWin")
-slider("Скорость нажатий (пауза)", "Delay", 0.03, 0.6, 0.01, "%.2f с")
-slider("Пауза перед ответом", "ThinkTime", 0, 4, 0.1, "%.1f с")
-toggle("Трудные окончания слов", "HardEnds")
+---------------------------------------------------------------- Страницы
+local mainPage = newPage("Auto-Win")
+local debugPage = newPage("Debug")
+newTab("Auto-Win", "Auto-Win")
+newTab("Debug", "Debug")
 
-local stRow = row(36)
-local stLabel = label(stRow, "Словарь: загрузка…", 12, C.mut, false)
-stLabel.Position, stLabel.Size = UDim2.fromOffset(12, 0), UDim2.new(1, -84, 1, 0)
-stLabel.TextTruncate = Enum.TextTruncate.AtEnd
-local scanBtn = new("TextButton", { Text = "Scan", TextSize = 12, Font = Enum.Font.GothamBold, TextColor3 = C.txt, BackgroundColor3 = C.acc, AutoButtonColor = false,
-	Size = UDim2.fromOffset(56, 24), Position = UDim2.new(1, -66, 0.5, -12) }, stRow)
-corner(scanBtn, 8)
-
+section(mainPage, "АВТО-ОТВЕТ")
+newToggle(mainPage, "Auto-Win", "Сам пишет слово на нужную букву", "AutoWin")
+newSlider(mainPage, "Скорость нажатий (пауза)", "Delay", 20, 600, " мс")
+newSlider(mainPage, "Пауза перед ответом", "ThinkTime", 0, 4000, " мс")
+newToggle(mainPage, "Трудные окончания", "Слова на щ, ц, ф, э, ю, ё, ж, х", "HardEnds")
+section(mainPage, "СТАТУС")
+local stCard = card(mainPage, 50)
+local stLabel = label(stCard, "Словарь: загрузка…", 12, C.mut, false)
+stLabel.Position, stLabel.Size = UDim2.fromOffset(14, 4), UDim2.new(1, -28, 1, -8)
+stLabel.TextWrapped = true
+stLabel.TextYAlignment = Enum.TextYAlignment.Center
 status = function(text, color)
 	stLabel.Text = text
 	stLabel.TextColor3 = color or C.mut
 end
 
+section(debugPage, "ПРОВЕРКА ИГРЫ")
+local scanCard = card(debugPage, 54)
+local sT = label(scanCard, "Scan", 14, C.txt, true)
+sT.Position, sT.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -110, 0, 18)
+local sS = label(scanCard, "Ищет клавиши, «Ввод», «Стереть», букву", 12, C.mut, false)
+sS.Position, sS.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -110, 0, 16)
+local scanBtn = new("TextButton", { Text = "Scan", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.acc, AutoButtonColor = false,
+	Size = UDim2.fromOffset(70, 30), Position = UDim2.new(1, -84, 0.5, -15) }, scanCard)
+corner(scanBtn, 9)
+local outCard = card(debugPage, 190)
+local outLabel = label(outCard, "Открой клавиатуру в игре (когда твой ход) и нажми Scan. Результат копируется в буфер.", 11, C.mut, false)
+outLabel.Position, outLabel.Size = UDim2.fromOffset(12, 8), UDim2.new(1, -24, 1, -16)
+outLabel.TextWrapped, outLabel.TextYAlignment = true, Enum.TextYAlignment.Top
+
 scanBtn.MouseButton1Click:Connect(function()
-	local s = scan()
+	local ok, s = pcall(scan)
+	if not ok then outLabel.Text = "Ошибка Scan: " .. tostring(s) return end
 	local letters = {}
 	for k in pairs(s.keys) do letters[#letters + 1] = k end
 	table.sort(letters)
-	local info = string.format("клавиш: %d, Ввод: %s, Стереть: %s, Стереть всё: %s, буква: %s",
-		s.nKeys, tostring(s.enter ~= nil), tostring(s.erase ~= nil), tostring(s.eraseAll ~= nil), tostring(s.letter))
-	status(info)
-	pcall(function() if setclipboard then setclipboard(info .. "\n" .. table.concat(letters, " ")) end end)
+	local lines = {
+		string.format("Клавиш найдено: %d", s.nKeys),
+		"Ввод: " .. tostring(s.enter ~= nil) .. "  Стереть: " .. tostring(s.erase ~= nil) .. "  Стереть всё: " .. tostring(s.eraseAll ~= nil),
+		"Нужная буква: " .. tostring(s.letter),
+		"Буквы: " .. table.concat(letters, " "),
+		string.format("Текстов на экране: %d, одиночных букв: %d (скрыто: %d)", s.stat.texts, s.stat.single, s.stat.hidden),
+		"Контейнер клавиатуры: " .. (s.container and pathOf(s.container) or "не определён"),
+	}
+	if s.stat.hidden > 0 then
+		lines[#lines + 1] = "Скрытые буквы (клавиатура могла быть закрыта):"
+		for _, h in ipairs(s.stat.hiddenSamples) do lines[#lines + 1] = "  " .. h end
+	end
+	local text = table.concat(lines, "\n")
+	outLabel.Text = text
+	outLabel.TextColor3 = s.nKeys >= 20 and C.txt or C.gold
+	pcall(function() if setclipboard then setclipboard(text) end end)
 end)
 
 task.spawn(function()
 	loadWords()
-	status("Слов в словаре: " .. wordCount .. (wordCount < 500 and " (мини-список, нет words/ru_words.txt)" or ""))
+	status("Слов в словаре: " .. wordCount .. (wordCount < 500 and " (мини-список: нет words/ru_words.txt)" or ""))
 end)
 
----------------------------------------------------------------- Свернуть / закрыть / выгрузка
-local bubble = new("TextButton", { Size = UDim2.fromOffset(48, 48), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.08, 0.3), BackgroundColor3 = C.acc,
-	Text = "W", TextColor3 = C.txt, Font = Enum.Font.GothamBold, TextSize = 20, AutoButtonColor = false, Visible = false }, gui)
-corner(bubble, 24) stroke(bubble, C.acc2, 2)
-local bi = new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = "", ScaleType = Enum.ScaleType.Crop }, bubble)
-corner(bi, 24)
-applyAsset(bi, "gameimages/logo.png", function() bubble.Text = "" bubble.BackgroundTransparency = 1 end)
+selectTab("Auto-Win")
 
-local function setMin(m) root.Visible = not m bubble.Visible = m end
-bubbleBtn.MouseButton1Click:Connect(function() setMin(true) end)
-makeDraggable(bubble, bubble, function() setMin(false) end)
+---------------------------------------------------------------- Свернуть / закрыть
+local rolled, hidden = false, false
+local function setRolled(v)
+	rolled = v
+	rollBtn.Text = v and "v" or "^"
+	if v then
+		TweenService:Create(win, TI, { Size = UDim2.fromOffset(WIN_W, HEADER_H) }):Play()
+		task.delay(0.25, function() if rolled then body.Visible = false end end)
+	else
+		body.Visible = true
+		TweenService:Create(win, TI, { Size = UDim2.fromOffset(WIN_W, WIN_H) }):Play()
+	end
+end
+rollBtn.MouseButton1Click:Connect(function() setRolled(not rolled) end)
+
+local bubble = new("TextButton", { Size = UDim2.fromOffset(54, 54), Position = UDim2.new(0, 16, 0.5, -27), Text = "W", TextSize = 24, Font = Enum.Font.GothamBold,
+	TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.acc, AutoButtonColor = false, Visible = false, ZIndex = 50 }, gui)
+corner(bubble, 27)
+stroke(bubble, Color3.new(1, 1, 1), 1.5, 0.6)
+do
+	local bi = new("ImageLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = "", ScaleType = Enum.ScaleType.Fit, ZIndex = 51 }, bubble)
+	corner(bi, 27)
+	applyAsset(bi, "gameimages/logo.png", function() bubble.Text = "" bubble.BackgroundTransparency = 1 end)
+end
+
+local function setHidden(v)
+	hidden = v
+	if v then
+		TweenService:Create(win, TI, { GroupTransparency = 1 }):Play()
+		task.delay(0.25, function() if hidden then root.Visible = false bubble.Visible = true end end)
+	else
+		bubble.Visible = false
+		root.Visible = true
+		TweenService:Create(win, TI, { GroupTransparency = 0 }):Play()
+	end
+end
+makeDraggable(bubble, bubble, function() setHidden(false) end)
+bubbleBtn.MouseButton1Click:Connect(function() setHidden(true) end)
 
 local function unload()
 	alive = false
@@ -449,5 +640,13 @@ local function unload()
 	for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 	pcall(function() gui:Destroy() end)
 end
-closeBtn.MouseButton1Click:Connect(unload)
+closeBtn.MouseButton1Click:Connect(function()
+	TweenService:Create(win, TI, { GroupTransparency = 1 }):Play()
+	bubble.Visible = false
+	task.delay(0.3, unload)
+end)
 genv.WordGameREZ_Unload = unload
+
+track(UserInputService.InputBegan:Connect(function(i, gp)
+	if not gp and i.KeyCode == Enum.KeyCode.RightShift then setHidden(not hidden) end
+end))
