@@ -100,27 +100,47 @@ local function chars(w) local t = {} for _, cp in utf8.codes(w) do t[#t + 1] = u
 
 ---------------------------------------------------------------- Словарь
 local byLetter, wordCount = {}, 0
+local seenW = {}
+-- 0 = принято, 1 = не только русские буквы, 2 = длина не 3–20, 3 = повтор
 local function addWord(w)
 	w = lowerRu((w:gsub("[%s%c]", "")))
 	local n = utf8.len(w)
-	if not n or n < 3 or n > 14 then return end
-	for _, cp in utf8.codes(w) do if not isCyr(cp) then return end end
+	if not n then return 1 end
+	for _, cp in utf8.codes(w) do if not isCyr(cp) then return 1 end end
+	if n < 3 or n > 20 then return 2 end
+	if seenW[w] then return 3 end
+	seenW[w] = true
 	local l = firstLetter(w)
 	byLetter[l] = byLetter[l] or {}
 	table.insert(byLetter[l], w)
 	wordCount += 1
+	return 0
 end
 local FALLBACK = "дом море енот тигр рыба аист торт тоннель лиса арбуз зебра апельсин нос слон нора ананас сок кот табурет тюлень нитка автобус сад дождь ёж жираф финик конь ёлка автомат тетрадь дерево облако окно ножницы собака арка аквариум мяч человек конфета ананас стол лимон носорог хлеб бабочка"
 local function loadWords()
-	local ok, txt = pcall(function()
-		local path = "HubREZ_" .. WORDS_FILE:gsub("[/\\]", "_")
-		if not (isfile and isfile(path)) then writefile(path, game:HttpGet(GITHUB_RAW .. WORDS_FILE)) end
-		return readfile(path)
-	end)
-	if ok and txt and #txt > 100 then
-		for w in txt:gmatch("[^\r\n]+") do addWord(w) end
+	local st = { source = "нет", lines = 0, ok = 0, badChars = 0, badLen = 0, dup = 0 }
+	local path = "HubREZ_" .. (WORDS_FILE:gsub("[/\\]", "_"))
+	local txt
+	-- 1) свой файл в папке исполнителя (приоритет), 2) свежий с GitHub, 3) кэш прошлого запуска
+	pcall(function() if isfile and isfile("WordGameREZ_words.txt") then txt = readfile("WordGameREZ_words.txt") st.source = "локальный файл" end end)
+	if not txt then
+		local okNet, fresh = pcall(function() return game:HttpGet(GITHUB_RAW .. WORDS_FILE .. "?t=" .. os.time()) end)
+		if okNet and type(fresh) == "string" and #fresh > 100 then
+			txt, st.source = fresh, "GitHub"
+			pcall(function() writefile(path, fresh) end)
+		else
+			pcall(function() if isfile and isfile(path) then txt = readfile(path) st.source = "кэш" end end)
+		end
 	end
-	if wordCount < 500 then for w in FALLBACK:gmatch("%S+") do addWord(w) end end
+	if txt and #txt > 100 then
+		for w in txt:gmatch("[^\r\n]+") do
+			st.lines += 1
+			local r = addWord(w)
+			if r == 0 then st.ok += 1 elseif r == 1 then st.badChars += 1 elseif r == 2 then st.badLen += 1 else st.dup += 1 end
+		end
+	end
+	if wordCount < 500 then for w in FALLBACK:gmatch("%S+") do addWord(w) end st.source = st.source .. " + мини-список" end
+	return st
 end
 
 ---------------------------------------------------------------- Журнал
@@ -311,7 +331,12 @@ end
 ---------------------------------------------------------------- Логика Auto-Win
 local used, bad = {}, {}
 local seenCount = 0
-local HARD = { ["щ"] = true, ["ц"] = true, ["ф"] = true, ["э"] = true, ["ю"] = true, ["ё"] = true, ["ж"] = true, ["х"] = true }
+local function resetMemory(reason)
+	used, bad, seenCount = {}, {}, 0
+	log("память слов сброшена: " .. reason)
+end
+-- чем меньше слов начинается на эту букву, тем сложнее противнику ответить (й, ё, щ, э, ю — самые трудные)
+local HARD = { ["ё"] = 6, ["э"] = 6, ["щ"] = 5, ["й"] = 5, ["ю"] = 5, ["ц"] = 3, ["ж"] = 3, ["ф"] = 3, ["х"] = 3, ["ш"] = 2 }
 local status = function() end
 local onScan = function() end
 local alive = true
@@ -320,18 +345,18 @@ local busy = false
 local function pickWord(letter)
 	local list = byLetter[letter]
 	if not list then return nil end
-	local fallbackW
-	for _ = 1, 600 do
+	local best, bestScore
+	for _ = 1, 900 do
 		local w = list[math.random(1, #list)]
 		if not used[w] and not bad[w] then
-			fallbackW = fallbackW or w
 			if not Settings.HardEnds then return w end
 			local chs = chars(w)
-			if HARD[chs[#chs]] then return w end
+			local score = HARD[chs[#chs]] or 0
+			if not bestScore or score > bestScore then best, bestScore = w, score end
+			if score >= 6 then break end
 		end
 	end
-	if fallbackW then return fallbackW end
-	-- случайные не сработали (почти всё занято): перебираем по порядку
+	if best then return best end
 	for _, w in ipairs(list) do if not used[w] and not bad[w] then return w end end
 	return nil
 end
@@ -455,6 +480,33 @@ local function playTurn(L, s)
 	return "failed"
 end
 
+-- память слов сбрасывается сама: игра закончилась (клавиатура пропала), герой умер или встал из-за стола
+local function resetMemory(reason)
+	local n = 0
+	for _ in pairs(used) do n += 1 end
+	if n == 0 and seenCount == 0 then return end
+	used, bad, seenCount = {}, {}, 0
+	log("память слов сброшена: " .. reason)
+end
+
+local function hookCharacter(char)
+	task.spawn(function()
+		local hum = char:WaitForChild("Humanoid", 15)
+		if not hum or not alive then return end
+		track(hum.Died:Connect(function() resetMemory("герой умер") end))
+		track(hum:GetPropertyChangedSignal("Sit"):Connect(function()
+			if not hum.Sit then
+				task.delay(0.5, function() if alive and not hum.Sit then resetMemory("встал из-за стола") end end)
+			end
+		end))
+	end)
+end
+if player.Character then hookCharacter(player.Character) end
+track(player.CharacterAdded:Connect(function(char)
+	resetMemory("новый персонаж")
+	hookCharacter(char)
+end))
+
 -- слова противника/свои с экрана и из мира (над головами) попадают в «использованные»
 local function rememberWords(list)
 	for _, w in ipairs(list) do
@@ -464,13 +516,33 @@ end
 
 task.spawn(function()
 	local turn = { waitChange = false, lastL = nil, lastDone = 0 }
+	local hadKb, kbLostAt = false, nil
+	local kbSeen, kbLostAt = false, nil
 	while alive do
 		task.wait(0.4)
 		local ok, err = pcall(function()
 			local s = scan()
 			if Settings.WatchWorld then rememberWords(s.words) end
 			local kb = s.nKeys >= 20 and s.enter ~= nil
+			if kb then
+				kbSeen, kbLostAt = true, nil
+			elseif kbSeen then
+				kbLostAt = kbLostAt or tick()
+				if tick() - kbLostAt >= 3 then
+					kbSeen, kbLostAt = false, nil
+					resetMemory("игра закончилась")
+				end
+			end
 			onScan(s, kb)
+			if kb then
+				hadKb, kbLostAt = true, nil
+			elseif hadKb then
+				kbLostAt = kbLostAt or tick()
+				if tick() - kbLostAt >= 4 then
+					hadKb, kbLostAt = false, nil
+					resetMemory("игра закончилась (клавиатура исчезла)")
+				end
+			end
 			if not Settings.AutoWin or busy then return end
 			if not kb then
 				status("Жду клавиатуру — сядь за стол к игроку")
@@ -496,6 +568,19 @@ task.spawn(function()
 		if not ok then busy = false status("Ошибка: " .. tostring(err):sub(1, 60), C.red) log("ошибка: " .. tostring(err):sub(1, 80)) end
 	end
 end)
+
+local function hookChar(char)
+	local hum = char:WaitForChild("Humanoid", 10)
+	if not hum then return end
+	track(hum.Died:Connect(function() resetMemory("герой погиб") end))
+	local wasSit = hum.Sit
+	track(hum:GetPropertyChangedSignal("Sit"):Connect(function()
+		if wasSit and not hum.Sit then resetMemory("герой встал") end
+		wasSit = hum.Sit
+	end))
+end
+if player.Character then task.spawn(hookChar, player.Character) end
+track(player.CharacterAdded:Connect(function(c) resetMemory("респавн") task.spawn(hookChar, c) end))
 
 -- слова в мире (BillboardGui/SurfaceGui над игроками), раз в пару секунд, без подвисаний
 task.spawn(function()
@@ -724,15 +809,13 @@ end
 
 ---------------------------------------------------------------- Страницы
 local mainPage = newPage("Auto-Win")
-local debugPage = newPage("Debug")
 newTab("Auto-Win", "Auto-Win")
-newTab("Debug", "Debug")
 
 section(mainPage, "АВТО-ОТВЕТ")
 newToggle(mainPage, "Auto-Win", "Сам пишет слово на нужную букву", "AutoWin")
 newSlider(mainPage, "Скорость нажатий (пауза)", "Delay", 20, 600, " мс")
 newSlider(mainPage, "Пауза перед ответом", "ThinkTime", 0, 4000, " мс")
-newToggle(mainPage, "Трудные окончания", "Слова на щ, ц, ф, э, ю, ё, ж, х", "HardEnds")
+newToggle(mainPage, "Сложные слова", "Слова-ловушки на й, ё, щ, ю, ц, ж, ф, х", "HardEnds")
 newToggle(mainPage, "Следить за словами", "Свои и чужие слова не повторяются", "WatchWorld")
 section(mainPage, "СОСТОЯНИЕ")
 local kbCard = card(mainPage, 50)
@@ -757,69 +840,11 @@ onScan = function(s, kb)
 	end
 end
 
-section(debugPage, "ПРОВЕРКА ИГРЫ")
-local scanCard = card(debugPage, 54)
-local sT = label(scanCard, "Scan", 14, C.txt, true)
-sT.Position, sT.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -110, 0, 18)
-local sS = label(scanCard, "Клавиши, «Ввод», «Стереть», поле слова", 12, C.mut, false)
-sS.Position, sS.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -110, 0, 16)
-local scanBtn = new("TextButton", { Text = "Scan", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.acc, AutoButtonColor = false,
-	Size = UDim2.fromOffset(70, 30), Position = UDim2.new(1, -84, 0.5, -15) }, scanCard)
-corner(scanBtn, 9)
-local outCard = card(debugPage, 150)
-local outLabel = label(outCard, "Сядь за стол и нажми Scan. Результат копируется в буфер.", 11, C.mut, false)
-outLabel.Position, outLabel.Size = UDim2.fromOffset(12, 8), UDim2.new(1, -24, 1, -16)
-outLabel.TextWrapped, outLabel.TextYAlignment = true, Enum.TextYAlignment.Top
-
-scanBtn.MouseButton1Click:Connect(function()
-	local ok, s = pcall(scan)
-	if not ok then outLabel.Text = "Ошибка Scan: " .. tostring(s) return end
-	local letters = {}
-	for k in pairs(s.keys) do letters[#letters + 1] = k end
-	table.sort(letters)
-	local lines = {
-		string.format("Клавиш найдено: %d", s.nKeys),
-		"Ввод: " .. tostring(s.enter ~= nil) .. "  Стереть: " .. tostring(s.erase ~= nil) .. "  Стереть всё: " .. tostring(s.eraseAll ~= nil),
-		"Поле со словом: «" .. s.row .. "»",
-		"Буквы: " .. table.concat(letters, " "),
-		string.format("Текстов: %d, одиночных букв: %d (скрыто: %d)", s.stat.texts, s.stat.single, s.stat.hidden),
-		"Клавиатура: " .. (s.keyParent and pathOf(s.keyParent) or "не найдена"),
-		"Способ нажатия: " .. METHODS[method] .. (methodOk and " (работает)" or " (не проверен)"),
-	}
-	if s.stat.hidden > 0 then
-		lines[#lines + 1] = "Скрытые буквы:"
-		for _, h in ipairs(s.stat.hiddenSamples) do lines[#lines + 1] = "  " .. h end
-	end
-	local text = table.concat(lines, "\n")
-	outLabel.Text = text
-	outLabel.TextColor3 = s.nKeys >= 20 and C.txt or C.gold
-	pcall(function() if setclipboard then setclipboard(text .. "\n\n" .. table.concat(logLines, "\n")) end end)
-end)
-
-local resetCard = card(debugPage, 54)
-local rT = label(resetCard, "Память слов", 14, C.txt, true)
-rT.Position, rT.Size = UDim2.fromOffset(14, 9), UDim2.new(1, -110, 0, 18)
-local rS = label(resetCard, "Забыть названные слова (новая игра)", 12, C.mut, false)
-rS.Position, rS.Size = UDim2.fromOffset(14, 28), UDim2.new(1, -110, 0, 16)
-local resetBtn = new("TextButton", { Text = "Сброс", TextSize = 13, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = C.red, AutoButtonColor = false,
-	Size = UDim2.fromOffset(70, 30), Position = UDim2.new(1, -84, 0.5, -15) }, resetCard)
-corner(resetBtn, 9)
-resetBtn.MouseButton1Click:Connect(function()
-	used, bad, seenCount = {}, {}, 0
-	log("память слов сброшена")
-end)
-
-section(debugPage, "ЖУРНАЛ")
-local logCard = card(debugPage, 210)
-local logLabel = label(logCard, "", 11, C.mut, false)
-logLabel.Position, logLabel.Size = UDim2.fromOffset(12, 8), UDim2.new(1, -24, 1, -16)
-logLabel.TextWrapped, logLabel.TextYAlignment = true, Enum.TextYAlignment.Top
-onLog = function() logLabel.Text = table.concat(logLines, "\n") end
-
 task.spawn(function()
-	loadWords()
-	status("Слов в словаре: " .. wordCount .. (wordCount < 500 and " (мини-список: нет words/ru_words.txt)" or ""))
-	log("словарь: " .. wordCount .. " слов")
+	local st = loadWords()
+	status("Слов в словаре: " .. wordCount .. " (" .. st.source .. ")")
+	log(string.format("словарь: %d слов, источник: %s", wordCount, st.source))
+	log(string.format("строк в файле: %d; принято: %d; не буквы: %d; длина не 3–20: %d; повторы: %d", st.lines, st.ok, st.badChars, st.badLen, st.dup))
 end)
 
 selectTab("Auto-Win")
